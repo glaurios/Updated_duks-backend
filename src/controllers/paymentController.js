@@ -7,15 +7,24 @@ import { sendEmail } from "../utils/Email.js";
 // 1️⃣ Initialize Payment
 export const initializePayment = async (req, res) => {
   try {
-    const { email: checkoutEmail, phone, provider, fullName } = req.body; // capture email, phone, provider, fullName
+    const { email: checkoutEmail, phone, provider, fullName, address } = req.body;
     const userEmail = checkoutEmail || req.user.email;
 
-    const cart = await Cart.findOne({ userId: req.user._id }).populate("items.drinkId");
-    if (!cart || cart.items.length === 0)
+    // Fetch cart items
+    const cartItems = await Cart.find({ userId: req.user._id }).populate({
+      path: "drinkId",
+      strictPopulate: false,
+    });
+
+    if (!cartItems || cartItems.length === 0)
       return res.status(400).json({ message: "Cart is empty" });
 
+    const validItems = cartItems.filter(item => item.drinkId);
+    if (validItems.length === 0)
+      return res.status(400).json({ message: "No valid drinks in cart" });
+
     let total = 0;
-    const items = cart.items.map(item => {
+    const items = validItems.map(item => {
       const price = item.drinkId.packs?.[0]?.price || 0;
       total += price * item.quantity;
       return {
@@ -23,10 +32,12 @@ export const initializePayment = async (req, res) => {
         name: item.drinkId.name,
         price,
         quantity: item.quantity,
+        pack: item.pack,
+        image: item.drinkId.imageUrl || item.drinkId.image || "",
       };
     });
 
-    const amount = total * 100; // Paystack expects kobo
+    const amount = total * 100;
 
     const paystackData = {
       email: userEmail,
@@ -37,7 +48,8 @@ export const initializePayment = async (req, res) => {
         userId: req.user._id,
         email: userEmail,
         fullName: fullName || req.user.fullName || "Customer",
-        phone: phone || "",
+        phone: phone || req.user.phone || "",
+        address: address || req.user.address || "",
         provider: provider || "",
         items,
       },
@@ -68,14 +80,13 @@ export const webhookPayment = async (req, res) => {
 
     if (event === "charge.success") {
       const { reference, metadata, amount } = data;
-      const { userId, fullName } = metadata;
-      let email = metadata.email;
+      const { userId, fullName, phone, email, address } = metadata;
       const totalAmount = amount / 100;
 
-      // fallback: fetch email from DB if missing
-      if (!email) {
+      let userEmail = email;
+      if (!userEmail) {
         const user = await User.findById(userId);
-        email = user?.email;
+        userEmail = user?.email;
       }
 
       let order = await Order.findOne({ paystackReference: reference });
@@ -87,11 +98,17 @@ export const webhookPayment = async (req, res) => {
           paystackReference: reference,
           paymentStatus: "paid",
           orderStatus: "confirmed",
+          customer: {
+            fullName: fullName || "Customer",
+            phone: phone || "",
+            email: userEmail || "",
+            address: address || "",
+          },
         });
         console.log(`✅ Order created: ${reference}`);
 
-        // ✅ Professional email to customer
-        if (email) {
+        // Customer email
+        if (userEmail) {
           const itemsHtml = metadata.items.map(
             item => `<tr>
                        <td style="padding:8px;border:1px solid #ddd;">${item.name}</td>
@@ -101,7 +118,7 @@ export const webhookPayment = async (req, res) => {
           ).join("");
 
           await sendEmail({
-            to: email,
+            to: userEmail,
             subject: "Your Duk's Juices Order is Confirmed ✅",
             html: `
               <div style="font-family: Arial, sans-serif; max-width:600px; margin:auto; border:1px solid #eee; border-radius:8px; overflow:hidden;">
@@ -134,7 +151,7 @@ export const webhookPayment = async (req, res) => {
           });
         }
 
-        // ✅ Admin notification email
+        // Admin email
         if (process.env.ADMIN_EMAIL) {
           const itemsHtml = metadata.items.map(
             item => `<tr>
@@ -177,7 +194,7 @@ export const webhookPayment = async (req, res) => {
         console.log(`⚠️ Order already exists for reference ${reference}`);
       }
 
-      await Cart.findOneAndUpdate({ userId }, { items: [] });
+      await Cart.deleteMany({ userId });
       console.log(`🧹 Cart cleared for user ${userId}`);
     }
 
@@ -188,7 +205,7 @@ export const webhookPayment = async (req, res) => {
   }
 };
 
-// 3️⃣ Verify Payment (safety check)
+// 3️⃣ Verify Payment
 export const verifyPayment = async (req, res) => {
   try {
     const { reference } = req.params;
@@ -201,13 +218,13 @@ export const verifyPayment = async (req, res) => {
     if (data.status !== "success")
       return res.status(400).json({ message: "Payment failed" });
 
-    const { userId, fullName } = data.metadata;
-    let email = data.metadata.email;
+    const { userId, fullName, phone, email, address } = data.metadata;
     const totalAmount = data.amount / 100;
 
-    if (!email) {
+    let userEmail = email;
+    if (!userEmail) {
       const user = await User.findById(userId);
-      email = user?.email;
+      userEmail = user?.email;
     }
 
     let order = await Order.findOne({ paystackReference: reference });
@@ -219,10 +236,16 @@ export const verifyPayment = async (req, res) => {
         paystackReference: reference,
         paymentStatus: "paid",
         orderStatus: "confirmed",
+        customer: {
+          fullName: fullName || "Customer",
+          phone: phone || "",
+          email: userEmail || "",
+          address: address || "",
+        },
       });
 
-      // send customer email
-      if (email) {
+      // Customer email (same as webhook)
+      if (userEmail) {
         const itemsHtml = data.metadata.items.map(
           item => `<tr>
                      <td style="padding:8px;border:1px solid #ddd;">${item.name}</td>
@@ -232,7 +255,7 @@ export const verifyPayment = async (req, res) => {
         ).join("");
 
         await sendEmail({
-          to: email,
+          to: userEmail,
           subject: "Your Duk's Juices Order is Confirmed ✅",
           html: `
             <div style="font-family: Arial, sans-serif; max-width:600px; margin:auto; border:1px solid #eee; border-radius:8px; overflow:hidden;">
@@ -265,7 +288,6 @@ export const verifyPayment = async (req, res) => {
         });
       }
 
-      // send admin email
       if (process.env.ADMIN_EMAIL) {
         const itemsHtml = data.metadata.items.map(
           item => `<tr>
@@ -305,7 +327,7 @@ export const verifyPayment = async (req, res) => {
         });
       }
 
-      await Cart.findOneAndUpdate({ userId }, { items: [] });
+      await Cart.deleteMany({ userId });
       console.log(`✅ Order created on backend verify: ${reference}`);
     }
 

@@ -1,28 +1,54 @@
+// src/models/order.js
 import mongoose from "mongoose";
-
-const orderItemSchema = new mongoose.Schema({
-  drinkId: { type: mongoose.Schema.Types.ObjectId, ref: "Drink", required: true },
-  name: { type: String, required: true },
-  quantity: { type: Number, required: true, min: 1 },
-  price: { type: Number, required: true },
-});
 
 const orderSchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    items: [orderItemSchema],
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    customer: {
+      fullName: { type: String, required: true },
+      email: { type: String, required: true },
+      phone: { type: String, required: true },
+      address: { type: String, required: true },
+      city: { type: String, default: "" },
+      country: { type: String, default: "Ghana" }, // optional
+    },
+
+    items: [
+      {
+        drinkId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Drink",
+          required: true,
+        },
+        image: { type: String },
+        name: { type: String, required: true },
+        pack: { type: String }, // like 500ml, 1L
+        price: { type: Number, required: true },
+        quantity: { type: Number, required: true },
+      },
+    ],
+
+    deliveryDate: { type: String, default: null }, // store as ISO string
+    deliveryTime: { type: String, default: null },
+
     totalAmount: { type: Number, required: true },
+
+    paystackReference: { type: String, required: true, unique: true },
     paymentStatus: {
       type: String,
-      enum: ["pending", "paid", "failed", "refunded"],
+      enum: ["pending", "paid", "refunded"],
       default: "pending",
     },
     orderStatus: {
       type: String,
-      enum: ["pending", "confirmed", "completed", "cancelled"],
-      default: "pending",
+      enum: ["confirmed", "processing", "completed", "cancelled"],
+      default: "confirmed",
     },
-    paystackReference: { type: String, required: true, unique: true },
   },
   { timestamps: true }
 );

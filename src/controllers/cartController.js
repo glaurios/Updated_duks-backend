@@ -1,23 +1,27 @@
 import Cart from "../models/cart.js";
 import Drink from "../models/drinks.js";
 
-// Add item to cart (handles duplicates safely)
+// ---------------- Add item to cart ----------------
 export const addToCart = async (req, res) => {
   try {
     let { drinkId, quantity = 1, pack } = req.body;
     const userId = req.user._id;
 
     quantity = Number(quantity);
-    pack = Number(pack);
 
     const drink = await Drink.findById(drinkId);
     if (!drink) return res.status(404).json({ message: "Drink not found" });
 
-    if (!Array.isArray(drink.packs) || drink.packs.length === 0) {
-      return res.status(400).json({ message: "Drink has no packs available" });
+    // Default to first available pack if not provided
+    if (!pack) {
+      pack = drink.packs?.[0]?.pack;
+    }
+    pack = Number(pack);
+
+    if (!drinkId || isNaN(pack) || quantity < 1) {
+      return res.status(400).json({ message: "Invalid drink, pack, or quantity" });
     }
 
-    // Use findOneAndUpdate with upsert to avoid duplicate key errors
     const cartItem = await Cart.findOneAndUpdate(
       { userId, drinkId, pack },
       { $inc: { quantity } },
@@ -31,22 +35,20 @@ export const addToCart = async (req, res) => {
   }
 };
 
-// Get all cart items for a user
+// ---------------- Get all cart items ----------------
 export const getCartItems = async (req, res) => {
   try {
     const userId = req.user._id;
-    const cart = await Cart.findOne({ userId }).populate("items.drinkId");
+    const cartItems = await Cart.find({ userId }).populate("drinkId");
 
-    if (!cart) return res.json({ cartItems: [] });
-
-    const result = cart.items.map((item) => ({
+    const result = cartItems.map((item) => ({
       id: item._id,
       drinkId: item.drinkId._id,
       name: item.drinkId.name,
-      price: item.drinkId.packs?.[0]?.price || 0,
+      price: item.drinkId.packs?.find(p => p.pack === item.pack)?.price || 0,
       qty: item.quantity,
       packs: item.drinkId.packs,
-      pack: item.drinkId.packs?.[0]?.pack || null,
+      pack: item.pack,
       image: item.drinkId.imageUrl || "",
     }));
 
@@ -57,34 +59,31 @@ export const getCartItems = async (req, res) => {
   }
 };
 
-// Remove item from cart
+// ---------------- Remove item from cart ----------------
 export const removeFromCart = async (req, res) => {
   try {
-    const { itemId } = req.params;
+    const { id } = req.params;
     const userId = req.user._id;
 
-    const cart = await Cart.findOne({ userId });
-    if (!cart) return res.status(404).json({ message: "Cart not found" });
+    const deletedItem = await Cart.findOneAndDelete({ _id: id, userId });
+    if (!deletedItem) return res.status(404).json({ message: "Cart item not found" });
 
-    cart.items = cart.items.filter((item) => item._id.toString() !== itemId);
-    await cart.save();
-
-    res.json({ message: "Item removed from cart", cart });
+    res.json({ message: "Item removed from cart", deletedItem });
   } catch (err) {
     console.error("❌ Remove from cart error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 };
 
-// Update quantity of a cart item
+// ---------------- Update cart item quantity ----------------
 export const updateCartItemQuantity = async (req, res) => {
   try {
-    const { id } = req.params; // cart item _id
+    const { id } = req.params;
     let { quantity } = req.body;
     const userId = req.user._id;
 
     quantity = Number(quantity);
-    if (!quantity || quantity < 1) {
+    if (isNaN(quantity) || quantity < 1) {
       return res.status(400).json({ message: "Quantity must be at least 1" });
     }
 
@@ -103,20 +102,30 @@ export const updateCartItemQuantity = async (req, res) => {
   }
 };
 
-// Update pack of a cart item
+// ---------------- Update cart item pack ----------------
 export const updateCartItemPack = async (req, res) => {
   try {
     const { id } = req.params;
-    const { pack } = req.body;
+    let { pack } = req.body;
     const userId = req.user._id;
 
-    const cartItem = await Cart.findOneAndUpdate(
-      { _id: id, userId },
-      { $set: { pack: Number(pack) } },
-      { new: true }
-    );
+    pack = Number(pack);
+    if (isNaN(pack)) return res.status(400).json({ message: "Invalid pack value" });
 
+    const cartItem = await Cart.findById(id);
     if (!cartItem) return res.status(404).json({ message: "Cart item not found" });
+
+    // Merge with existing cart item if same drinkId and pack exists
+    const existingItem = await Cart.findOne({ userId, drinkId: cartItem.drinkId, pack });
+    if (existingItem) {
+      existingItem.quantity += cartItem.quantity;
+      await existingItem.save();
+      await cartItem.deleteOne();
+      return res.json({ message: "Pack updated (merged with existing item)", cartItem: existingItem });
+    }
+
+    cartItem.pack = pack;
+    await cartItem.save();
 
     res.json({ message: "Pack updated", cartItem });
   } catch (err) {
