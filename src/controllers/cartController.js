@@ -3,10 +3,6 @@ import Drink from "../models/drinks.js";
 
 // Add item to cart (handles duplicates safely)
 export const addToCart = async (req, res) => {
-<<<<<<< HEAD
-  try {
-    const { drinkId, quantity } = req.body;
-=======
   try {
     let { drinkId, quantity = 1, pack } = req.body;
     const userId = req.user._id;
@@ -38,86 +34,6 @@ export const addToCart = async (req, res) => {
 // Get all cart items for a user
 export const getCartItems = async (req, res) => {
   try {
->>>>>>> d8e2bab540c2de9eb0dfd8a5cd18c9512b6c9bb8
-    const userId = req.user._id;
-
-    const drink = await Drink.findById(drinkId);
-    if (!drink) return res.status(404).json({ message: "Drink not found" });
-
-<<<<<<< HEAD
-    let cart = await Cart.findOne({ userId });
-
-    if (!cart) {
-      // Create cart if it doesn't exist
-      cart = await Cart.create({
-        userId,
-        items: [{ drinkId, quantity: quantity || 1 }],
-      });
-    } else {
-      const existingItem = cart.items.find(
-        (item) => item.drinkId.toString() === drinkId
-      );
-      if (existingItem) {
-        existingItem.quantity += quantity || 1;
-      } else {
-        cart.items.push({ drinkId, quantity: quantity || 1 });
-      }
-      await cart.save();
-    }
-
-    res.status(201).json({ message: "Cart updated", cart });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
-=======
-    const result = items
-      .map((item) => {
-        const drink = item.drinkId;
-        if (!drink) return null;
-
-        const selectedPack = Array.isArray(drink.packs)
-          ? drink.packs.find((p) => Number(p.pack) === Number(item.pack))
-          : null;
-
-        return {
-          id: item._id,
-          drinkId: drink._id,
-          name: drink.name,
-          price: selectedPack?.price || 0,
-          qty: item.quantity,
-          packs: Array.isArray(drink.packs) ? drink.packs : [],
-          pack: item.pack,
-          image: drink?.imageUrl || "",
-        };
-      })
-      .filter(Boolean);
-
-    res.json({ cartItems: result });
-  } catch (err) {
-    console.error("❌ Get cart items error:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
-  }
-};
-
-// Remove item from cart
-export const removeFromCart = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user._id;
-
-    const item = await Cart.findOneAndDelete({ _id: id, userId });
-    if (!item) return res.status(404).json({ message: "Cart item not found" });
-
-    res.json({ message: "Item removed from cart" });
-  } catch (err) {
-    console.error("❌ Remove from cart error:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
->>>>>>> d8e2bab540c2de9eb0dfd8a5cd18c9512b6c9bb8
-  }
-};
-
-export const getCartItems = async (req, res) => {
-  try {
     const userId = req.user._id;
     const cart = await Cart.findOne({ userId }).populate("items.drinkId");
 
@@ -136,12 +52,12 @@ export const getCartItems = async (req, res) => {
 
     res.json({ cartItems: result });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Get cart items error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 };
 
-<<<<<<< HEAD
+// Remove item from cart
 export const removeFromCart = async (req, res) => {
   try {
     const { itemId } = req.params;
@@ -155,11 +71,11 @@ export const removeFromCart = async (req, res) => {
 
     res.json({ message: "Item removed from cart", cart });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Remove from cart error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
-=======
+
 // Update quantity of a cart item
 export const updateCartItemQuantity = async (req, res) => {
   try {
@@ -187,8 +103,7 @@ export const updateCartItemQuantity = async (req, res) => {
   }
 };
 
-
-// controllers/cartController.js
+// Update pack of a cart item
 export const updateCartItemPack = async (req, res) => {
   try {
     const { id } = req.params;
@@ -209,6 +124,3 @@ export const updateCartItemPack = async (req, res) => {
     res.status(500).json({ message: "Server error", error: err.message });
   }
 };
-
-
->>>>>>> d8e2bab540c2de9eb0dfd8a5cd18c9512b6c9bb8
