@@ -181,7 +181,7 @@ export const webhookPayment = async (req, res) => {
 
         // ✅ Send email notifications
         await sendEmail({
-          to: metadata.email || "", // ensure your metadata includes user email
+          to: metadata.email || "", 
           subject: "Order Confirmed ✅",
           html: `<p>Your order <b>${reference}</b> has been successfully placed and confirmed.</p>
                  <p>Total Amount: GHS ${totalAmount}</p>`
@@ -195,6 +195,19 @@ export const webhookPayment = async (req, res) => {
       } else {
         console.log(`⚠️ Order already exists for reference ${reference}`);
       }
+
+      // ✅ Clear entire cart for user
+      await Cart.deleteMany({ userId });
+      console.log(`🧹 Cart cleared for user ${userId}`);
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.status(500).send("Server error");
+  }
+};
+
 
       // Clear cart
       await Cart.findOneAndUpdate({ userId }, { items: [] });
