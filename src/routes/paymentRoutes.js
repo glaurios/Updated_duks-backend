@@ -1,27 +1,12 @@
 import express from "express";
-import {
-  initializePayment,
-  verifyPayment,
-  webhookPayment,
-} from "../controllers/paymentController.js";
-
-import {
-  getUserOrders,
-  getOrderById,
-  getAllOrders,
-  getOrderStats,
-  cancelOrder,
-  updateOrderStatus,
-} from "../controllers/orderController.js";
-
+import { initializePayment, verifyPayment, webhookPayment } from "../controllers/paymentController.js";
+import { getUserOrders, getOrderById, getAllOrders, getOrderStats, cancelOrder, updateOrderStatus } from "../controllers/orderController.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
 // Payments
-// Payments
 router.post("/initialize", authMiddleware, initializePayment);
-
 router.get("/verify/:reference", verifyPayment);
 router.post("/webhook", webhookPayment);
 

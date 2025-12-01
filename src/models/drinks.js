@@ -32,7 +32,7 @@ const drinkSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["active", "inactive"], // ✅ lowercase & consistent
+      enum: ["active", "inactive", "few packs left", "out of stock"],
       default: "active",
     },
     available: {
@@ -43,7 +43,7 @@ const drinkSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    packs: [packSchema], // ✅ supports multiple pack options
+    packs: [packSchema],
   },
   { timestamps: true }
 );

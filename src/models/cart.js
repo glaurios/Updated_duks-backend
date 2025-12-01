@@ -1,25 +1,29 @@
 import mongoose from "mongoose";
 
+const cartItemSchema = new mongoose.Schema({
+  drinkId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Drink",
+    required: true,
+  },
+  quantity: {
+    type: Number,
+    required: true,
+    default: 1,
+    min: 1,
+  },
+});
+
 const cartSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User", // ✅ references the User collection
+      ref: "User",
       required: true,
     },
-    drinkId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Drink", // ✅ references the Drink collection
-      required: true,
-    },
-    quantity: {
-      type: Number,
-      required: true,
-      default: 1,
-      min: 1,
-    },
+    items: [cartItemSchema], // 👈 Now supports multiple cart items
   },
-  { timestamps: true } // ✅ adds createdAt & updatedAt
+  { timestamps: true }
 );
 
 export default mongoose.model("Cart", cartSchema);

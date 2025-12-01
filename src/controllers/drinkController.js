@@ -1,10 +1,6 @@
 import Drink from "../models/drinks.js";
 
-/**
- * ===============================
- * 🟢 GET ALL DRINKS (Public)
- * ===============================
- */
+// ================= GET ALL DRINKS (Public)
 export const getAllDrinks = async (req, res) => {
   try {
     const drinks = await Drink.find();
@@ -23,11 +19,7 @@ export const getAllDrinks = async (req, res) => {
   }
 };
 
-/**
- * ===============================
- * 🟢 GET ONE DRINK BY ID (Public)
- * ===============================
- */
+// ================= GET ONE DRINK BY ID (Public)
 export const getDrinkById = async (req, res) => {
   try {
     const drink = await Drink.findById(req.params.id);
@@ -45,16 +37,11 @@ export const getDrinkById = async (req, res) => {
   }
 };
 
-/**
- * ===============================
- * 🔒 ADD NEW DRINK (Admin only)
- * ===============================
- */
+// ================= ADD NEW DRINK (Admin)
 export const addDrink = async (req, res) => {
   try {
     const { name, description, category, size, status, packs } = req.body;
 
-    // ✅ FIXED: Validate name and packs instead of price
     if (!name || !packs) {
       return res.status(400).json({
         success: false,
@@ -62,14 +49,12 @@ export const addDrink = async (req, res) => {
       });
     }
 
-    // 🖼️ Handle Cloudinary image upload
     let imageUrl = "";
     if (req.file) {
       if (req.file.path) imageUrl = req.file.path;
       else if (req.file.url) imageUrl = req.file.url;
     }
 
-    // 🧩 Parse packs safely
     let parsedPacks = [];
     if (packs) {
       try {
@@ -83,7 +68,6 @@ export const addDrink = async (req, res) => {
       }
     }
 
-    // ✅ Additional validation: ensure packs array has at least one item with pack and price
     if (!Array.isArray(parsedPacks) || parsedPacks.length === 0) {
       return res.status(400).json({
         success: false,
@@ -91,7 +75,6 @@ export const addDrink = async (req, res) => {
       });
     }
 
-    // Validate each pack has required fields
     for (const pack of parsedPacks) {
       if (!pack.pack || !pack.price) {
         return res.status(400).json({
@@ -101,7 +84,6 @@ export const addDrink = async (req, res) => {
       }
     }
 
-    // ✅ FIX: Convert status to lowercase to match enum values
     const drinkStatus = status ? status.toLowerCase() : "active";
 
     const newDrink = new Drink({
@@ -109,7 +91,7 @@ export const addDrink = async (req, res) => {
       description: description || "",
       category: category || "",
       size: size || "",
-      status: drinkStatus, // ✅ Now uses lowercase status
+      status: drinkStatus,
       available: true,
       imageUrl,
       packs: parsedPacks,
@@ -132,28 +114,21 @@ export const addDrink = async (req, res) => {
   }
 };
 
-/**
- * ===============================
- * 🔒 UPDATE A DRINK (Admin only)
- * ===============================
- */
+// ================= UPDATE A DRINK (Admin)
 export const updateDrink = async (req, res) => {
   try {
     const { id } = req.params;
     let updates = { ...req.body };
 
-    // ✅ FIX: Convert status to lowercase if it exists
     if (updates.status) {
       updates.status = updates.status.toLowerCase();
     }
 
-    // 🖼️ Handle new image (Cloudinary)
     if (req.file) {
       if (req.file.path) updates.imageUrl = req.file.path;
       else if (req.file.url) updates.imageUrl = req.file.url;
     }
 
-    // 🧩 Parse packs JSON if sent as string
     if (updates.packs && typeof updates.packs === "string") {
       try {
         updates.packs = JSON.parse(updates.packs);
@@ -163,7 +138,6 @@ export const updateDrink = async (req, res) => {
     }
 
     const updatedDrink = await Drink.findByIdAndUpdate(id, updates, { new: true });
-
     if (!updatedDrink) {
       return res.status(404).json({ success: false, message: "Drink not found" });
     }
@@ -183,11 +157,7 @@ export const updateDrink = async (req, res) => {
   }
 };
 
-/**
- * ===============================
- * 🔒 DELETE A DRINK (Admin only)
- * ===============================
- */
+// ================= DELETE A DRINK (Admin)
 export const deleteDrink = async (req, res) => {
   try {
     const { id } = req.params;

@@ -1,85 +1,80 @@
-import Cart from "../models/cart.js"
-import Drink from "../models/drinks.js"
+import Cart from "../models/cart.js";
+import Drink from "../models/drinks.js";
 
 export const addToCart = async (req, res) => {
-try {
-const { drinkId, quantity } = req.body
-const userId = req.user._id;
-
-const drink = await Drink.findById(drinkId)
-if (!drink) return res.status(404).json({ message: "Drink not found" })
-
-let existingItem = await Cart.findOne({ userId, drinkId })
-
-if (existingItem) {
-  existingItem.quantity = existingItem.quantity + (quantity || 1)
-  await existingItem.save()
-  return res.json({ message: "Cart updated", cartItem: existingItem })
-}
-
-const cartItem = await Cart.create({
-  userId,
-  drinkId,
-  quantity: quantity || 1
-})
-
-res.status(201).json({ message: "Added to cart", cartItem })
-
-
-} catch (err) {
-res.status(500).json({ message: "Server error" })
-}
-}
-
-export const getCartItems = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const { drinkId, quantity } = req.body;
+    const userId = req.user._id;
 
-    const items = await Cart.find({ userId }).populate("drinkId");
+    const drink = await Drink.findById(drinkId);
+    if (!drink) return res.status(404).json({ message: "Drink not found" });
 
-    const result = items.map(item => {
-      const drink = item.drinkId;
+    let cart = await Cart.findOne({ userId });
 
-      return {
-        id: item._id,
-        drinkId: drink._id,
-        name: drink.name,
+    if (!cart) {
+      // Create cart if it doesn't exist
+      cart = await Cart.create({
+        userId,
+        items: [{ drinkId, quantity: quantity || 1 }],
+      });
+    } else {
+      const existingItem = cart.items.find(
+        (item) => item.drinkId.toString() === drinkId
+      );
+      if (existingItem) {
+        existingItem.quantity += quantity || 1;
+      } else {
+        cart.items.push({ drinkId, quantity: quantity || 1 });
+      }
+      await cart.save();
+    }
 
-        // FIX PRICE (use the first pack price)
-        price: drink.packs?.[0]?.price || 0,
-
-        qty: item.quantity,
-
-        // FIX PACKS
-        packs: drink.packs,
-        pack: drink.packs?.[0]?.pack || null,
-
-        // FIX IMAGE
-        image: drink?.imageUrl || "",
-      };
-    });
-
-    res.json({ cartItems: result });
-
+    res.status(201).json({ message: "Cart updated", cart });
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 };
 
+export const getCartItems = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const cart = await Cart.findOne({ userId }).populate("items.drinkId");
+
+    if (!cart) return res.json({ cartItems: [] });
+
+    const result = cart.items.map((item) => ({
+      id: item._id,
+      drinkId: item.drinkId._id,
+      name: item.drinkId.name,
+      price: item.drinkId.packs?.[0]?.price || 0,
+      qty: item.quantity,
+      packs: item.drinkId.packs,
+      pack: item.drinkId.packs?.[0]?.pack || null,
+      image: item.drinkId.imageUrl || "",
+    }));
+
+    res.json({ cartItems: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
 
 export const removeFromCart = async (req, res) => {
-try {
-const { id } = req.params
-const userId = req.user._id;
+  try {
+    const { itemId } = req.params;
+    const userId = req.user._id;
 
-const item = await Cart.findOneAndDelete({ _id: id, userId })
-if (!item) return res.status(404).json({ message: "Cart item not found" })
+    const cart = await Cart.findOne({ userId });
+    if (!cart) return res.status(404).json({ message: "Cart not found" });
 
-res.json({ message: "Item removed from cart" })
+    cart.items = cart.items.filter((item) => item._id.toString() !== itemId);
+    await cart.save();
 
-
-} catch (err) {
-res.status(500).json({ message: "Server error" })
-}
-}
+    res.json({ message: "Item removed from cart", cart });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+};

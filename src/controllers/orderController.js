@@ -1,35 +1,30 @@
 import Order from "../models/order.js";
 import Cart from "../models/cart.js";
+import { sendEmail } from "../utils/Email.js"; // ✅ email utility
 
-// 📌 Get all orders (Admin)
+// ================= Admin & User routes =================
 export const getAllOrders = async (req, res) => {
   try {
-    const orders = await Order.find().sort({ createdAt: -1 });
+    const orders = await Order.find().sort({ createdAt: -1 }).populate("userId", "email name");
     res.json({ orders });
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch orders" });
   }
 };
 
-// 📌 Get logged-in user's paid orders
 export const getUserOrders = async (req, res) => {
   try {
-    const orders = await Order.find({
-      userId: req.user._id,
-      paymentStatus: "paid",
-    }).sort({ createdAt: -1 });
-
+    const orders = await Order.find({ userId: req.user._id, paymentStatus: "paid" }).sort({ createdAt: -1 });
     res.json({ orders });
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch user orders" });
   }
 };
 
-// 📌 Get a single order by ID
 export const getOrderById = async (req, res) => {
   try {
     const { id } = req.params;
-    const order = await Order.findById(id);
+    const order = await Order.findById(id).populate("userId", "email name");
     if (!order) return res.status(404).json({ message: "Order not found" });
     res.json({ order });
   } catch (err) {
@@ -37,18 +32,23 @@ export const getOrderById = async (req, res) => {
   }
 };
 
-// 📌 Admin — Update Order Status
+// ================= Admin updates order status =================
 export const updateOrderStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { orderStatus } = req.body;
 
-    const order = await Order.findByIdAndUpdate(
-      id,
-      { orderStatus },
-      { new: true }
-    );
+    const order = await Order.findByIdAndUpdate(id, { orderStatus }, { new: true }).populate("userId", "email name");
     if (!order) return res.status(404).json({ message: "Order not found" });
+
+    // ✅ Send email if order completed
+    if (orderStatus === "completed") {
+      await sendEmail({
+        to: order.userId.email,
+        subject: "Order Completed ✅",
+        html: `<p>Your order <b>${order._id}</b> has been completed/delivered. Thank you for shopping with us!</p>`
+      });
+    }
 
     res.json({ message: "Order status updated", order });
   } catch (err) {
@@ -56,7 +56,7 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-// 📌 Cancel Order
+// ================= Cancel order =================
 export const cancelOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -64,15 +64,24 @@ export const cancelOrder = async (req, res) => {
       id,
       { orderStatus: "cancelled", paymentStatus: "refunded" },
       { new: true }
-    );
+    ).populate("userId", "email name");
+
     if (!order) return res.status(404).json({ message: "Order not found" });
+
+    // ✅ Send email notification
+    await sendEmail({
+      to: order.userId.email,
+      subject: "Order Cancelled ❌",
+      html: `<p>Your order <b>${order._id}</b> has been cancelled. Payment has been refunded if applicable.</p>`
+    });
+
     res.json({ message: "Order cancelled", order });
   } catch (err) {
     res.status(500).json({ message: "Failed to cancel order" });
   }
 };
 
-// 📌 Stats for Admin Dashboard
+// ================= Admin stats =================
 export const getOrderStats = async (req, res) => {
   try {
     const totalOrders = await Order.countDocuments();
@@ -81,54 +90,120 @@ export const getOrderStats = async (req, res) => {
       { $group: { _id: null, totalRevenue: { $sum: "$totalAmount" } } },
     ]);
     const totalRevenue = totalRevenueAgg[0]?.totalRevenue || 0;
-
     res.json({ totalOrders, totalRevenue });
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch stats" });
   }
 };
 
-// 📌 Paystack Payment Callback: Create Order + Clear Cart
+// =================== Webhook & Checkout ===================
+
+// Create order from checkout (manual POST route)
 export const createOrderFromCheckout = async (req, res) => {
   try {
     const { reference } = req.body;
-
-    if (!reference) {
-      return res.status(400).json({ message: "Missing payment reference" });
-    }
+    if (!reference) return res.status(400).json({ message: "Missing payment reference" });
 
     const userId = req.user._id;
+    const cartItems = await Cart.find({ userId }).populate("drinkId");
+    if (!cartItems.length) return res.status(404).json({ message: "Cart is empty" });
 
-    const cart = await Cart.findOne({ userId });
+    let totalAmount = 0;
+    const items = cartItems.map(item => {
+      const price = item.drinkId.packs[0]?.price || 0;
+      totalAmount += price * item.quantity;
+      return {
+        drinkId: item.drinkId._id,
+        name: item.drinkId.name,
+        price,
+        quantity: item.quantity
+      };
+    });
 
-    if (!cart || cart.items.length === 0) {
-      return res.status(404).json({ message: "Cart is empty" });
+    let order = await Order.findOne({ paystackReference: reference });
+    if (!order) {
+      order = await Order.create({
+        userId,
+        items,
+        totalAmount,
+        paymentStatus: "paid",
+        orderStatus: "confirmed",
+        paystackReference: reference
+      });
+
+      // ✅ Send email notifications
+      await sendEmail({
+        to: req.user.email,
+        subject: "Order Confirmed ✅",
+        html: `<p>Your order <b>${reference}</b> has been successfully placed and confirmed.</p>
+               <p>Total Amount: GHS ${totalAmount}</p>`
+      });
+      await sendEmail({
+        to: process.env.ADMIN_EMAIL,
+        subject: "New Order Placed 🛒",
+        html: `<p>New order <b>${reference}</b> has been placed by ${req.user.email}.</p>
+               <p>Total Amount: GHS ${totalAmount}</p>`
+      });
     }
 
-    const newOrder = new Order({
-      userId,
-      items: cart.items,
-      totalAmount: cart.totalPrice,
-      paymentStatus: "paid",
-      orderStatus: "completed",
-      paymentReference: reference,
-    });
+    await Cart.deleteMany({ userId });
+    res.status(201).json({ success: true, order });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to create order" });
+  }
+};
 
-    await newOrder.save();
+// =================== Paystack Webhook ===================
+export const webhookPayment = async (req, res) => {
+  try {
+    console.log("💥 Paystack Webhook received at server:", new Date());
+    console.log("📦 Payload:", req.body);
 
-    // Clear cart
-    cart.items = [];
-    cart.totalPrice = 0;
-    await cart.save();
+    const { event, data } = req.body;
+    if (event === "charge.success") {
+      const { reference, metadata, amount } = data;
+      const { userId, items } = metadata;
+      const totalAmount = amount / 100;
 
-    return res.status(201).json({
-      success: true,
-      message: "Order created successfully",
-      order: newOrder,
-    });
+      // Avoid duplicates
+      let order = await Order.findOne({ paystackReference: reference });
+      if (!order) {
+        order = await Order.create({
+          userId,
+          items,
+          totalAmount,
+          paystackReference: reference,
+          paymentStatus: "paid",
+          orderStatus: "confirmed"
+        });
+        console.log(`✅ Order created for reference ${reference}`);
 
-  } catch (error) {
-    console.error("❌ Error processing payment callback:", error);
-    res.status(500).json({ message: "Error processing order" });
+        // ✅ Send email notifications
+        await sendEmail({
+          to: metadata.email || "", // ensure your metadata includes user email
+          subject: "Order Confirmed ✅",
+          html: `<p>Your order <b>${reference}</b> has been successfully placed and confirmed.</p>
+                 <p>Total Amount: GHS ${totalAmount}</p>`
+        });
+        await sendEmail({
+          to: process.env.ADMIN_EMAIL,
+          subject: "New Order Placed 🛒",
+          html: `<p>New order <b>${reference}</b> has been placed.</p>
+                 <p>Total Amount: GHS ${totalAmount}</p>`
+        });
+      } else {
+        console.log(`⚠️ Order already exists for reference ${reference}`);
+      }
+
+      // Clear cart
+      await Cart.findOneAndUpdate({ userId }, { items: [] });
+      console.log(`🧹 Cart cleared for user ${userId}`);
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.status(500).send("Server error");
   }
 };
