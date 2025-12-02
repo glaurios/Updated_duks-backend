@@ -133,3 +133,52 @@ export const updateCartItemPack = async (req, res) => {
     res.status(500).json({ message: "Server error", error: err.message });
   }
 };
+
+
+
+// ---------------- Add multiple items to cart (Batch) ----------------
+export const addManyToCart = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const items = req.body.items; // array of { drinkId, quantity, pack }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: "Items array required" });
+    }
+
+    const results = [];
+
+    for (const item of items) {
+      let { drinkId, quantity = 1, pack } = item;
+
+      quantity = Number(quantity);
+
+      const drink = await Drink.findById(drinkId);
+      if (!drink) continue;
+
+      if (!pack) {
+        pack = drink.packs?.[0]?.pack;
+      }
+      pack = Number(pack);
+
+      if (!drinkId || isNaN(pack) || quantity < 1) continue;
+
+      const cartItem = await Cart.findOneAndUpdate(
+        { userId, drinkId, pack },
+        { $inc: { quantity } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+
+      results.push(cartItem);
+    }
+
+    res.status(201).json({
+      message: "Batch items added",
+      cartItems: results,
+    });
+  } catch (err) {
+    console.error("❌ AddMany error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+};
+
