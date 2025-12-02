@@ -12,7 +12,7 @@ const orderSchema = new mongoose.Schema(
     customer: {
       fullName: { type: String, required: true },
       email: { type: String, required: true },
-      phone: { type: String, required: true },
+      phone: { type: String,},
       address: { type: String,},
       city: { type: String, default: "" },
       country: { type: String, default: "Ghana" }, // optional
