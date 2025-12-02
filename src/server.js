@@ -25,27 +25,26 @@ const __dirname = path.dirname(__filename);
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
-// CORS setup
+// ---------------- Dynamic CORS ----------------
 const allowedOrigins = [
-  "http://localhost:8080",   // Local dev
-  "https://durks.vercel.app" // Production frontend (no trailing slash)
+  "http://localhost:3000",        // local frontend
+  "https://durks.vercel.app"      // production frontend
 ];
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true); // Allow Postman or mobile apps
-      if (allowedOrigins.indexOf(origin) === -1) {
-        const msg = `CORS policy: The origin ${origin} is not allowed.`;
-        return callback(new Error(msg), false);
-      }
-      return callback(null, true);
-    },
-    credentials: true,
-  })
-);
+app.use(cors({
+  origin: function(origin, callback) {
+    // allow requests with no origin (like mobile apps or Postman)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = `CORS policy: ${origin} not allowed`;
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+}));
 
-// Middleware
+// ---------------- Middleware ----------------
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -58,7 +57,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Routes
+// ---------------- Routes ----------------
 app.use("/api/auth", authRoutes);
 app.use("/api/drinks", drinkRoutes);
 app.use("/api/cart", cartRoutes);
@@ -71,12 +70,12 @@ app.get("/", (req, res) => {
   res.send("Drink Shop Backend Running 🚀");
 });
 
-// Handle unknown routes
+// ---------------- Unknown route handler ----------------
 app.use((req, res) => {
   res.status(404).json({ success: false, message: "Route not found" });
 });
 
-// Global error handler
+// ---------------- Global error handler ----------------
 app.use((err, req, res, next) => {
   console.error("💥 Server Error:", err);
   res.status(err.status || 500).json({
@@ -86,7 +85,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// MongoDB Connection
+// ---------------- MongoDB Connection ----------------
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected successfully"))
@@ -95,6 +94,6 @@ mongoose
     process.exit(1);
   });
 
-// Start server
+// ---------------- Start server ----------------
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
