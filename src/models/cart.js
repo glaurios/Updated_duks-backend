@@ -4,12 +4,12 @@ const cartSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User", // ✅ references the User collection
+      ref: "User", // references the User collection
       required: true,
     },
     drinkId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Drink", // ✅ references the Drink collection
+      ref: "Drink", // references the Drink collection
       required: true,
     },
     quantity: {
@@ -17,6 +17,10 @@ const cartSchema = new mongoose.Schema(
       required: true,
       default: 1,
       min: 1,
+    },
+    pack: {
+      type: Number, // ✅ added pack as a number
+      required: true,
     },
   },
   { timestamps: true }
