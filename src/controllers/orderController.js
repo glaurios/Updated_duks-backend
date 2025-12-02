@@ -3,23 +3,10 @@ import Order from "../models/order.js";
 import Cart from "../models/cart.js";
 import { sendEmail } from "../utils/Email.js";
 
-/**
- * Note:
- * - This controller expects `metadata` from Paystack to include:
- *   - cart: array of items (drinkId, name, price, quantity, image, pack)
- *   - customer: { fullName, email, phone, address, city, country }
- *   - deliveryDate (ISO string) and deliveryTime (string) — optional
- *
- * - For manual createOrderFromCheckout (POST /orders/paystack/callback or your manual route)
- *   the request body should include { reference, customer, deliveryDate, deliveryTime }
- *   or you can rely on the server-side Cart to build items and use req.body.customer for customer info.
- */
-
 /* ----------------- Admin & User routes ----------------- */
 
 export const getAllOrders = async (req, res) => {
   try {
-    // keep user info populated, but order.items already contains all product details
     const orders = await Order.find()
       .sort({ createdAt: -1 })
       .populate("userId", "email name");
@@ -32,11 +19,10 @@ export const getAllOrders = async (req, res) => {
 
 export const getUserOrders = async (req, res) => {
   try {
-    const orders = await Order.find({
-      userId: req.user._id,
-      paymentStatus: "paid",
-    }).sort({ createdAt: -1 });
+    const userId = req.user?._id || req.user?.id || req.user;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
+    const orders = await Order.find({ userId }).sort({ createdAt: -1 });
     res.json({ orders });
   } catch (err) {
     console.error("Get user orders error:", err);
@@ -68,7 +54,6 @@ export const updateOrderStatus = async (req, res) => {
 
     if (!order) return res.status(404).json({ message: "Order not found" });
 
-    // notify user when delivered/completed
     if (orderStatus === "completed") {
       await sendEmail({
         to: order.userId.email,
@@ -85,17 +70,25 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-/* ----------------- Cancel order ----------------- */
+/* ----------------- Cancel order (with ownership check) ----------------- */
 
 export const cancelOrder = async (req, res) => {
   try {
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { orderStatus: "cancelled", paymentStatus: "refunded" },
-      { new: true }
-    ).populate("userId", "email name");
-
+    const order = await Order.findById(req.params.id).populate("userId", "email name");
     if (!order) return res.status(404).json({ message: "Order not found" });
+
+    // Only owner or admin can cancel
+    const requesterId = req.user?._id?.toString() || req.user?.id?.toString();
+    const ownerId = order.userId?._id?.toString() || order.userId?.toString();
+    const isAdmin = req.user?.isAdmin;
+
+    if (requesterId !== ownerId && !isAdmin) {
+      return res.status(403).json({ message: "Not authorized to cancel this order" });
+    }
+
+    order.orderStatus = "cancelled";
+    order.paymentStatus = "refunded";
+    await order.save();
 
     await sendEmail({
       to: order.userId.email,
@@ -129,80 +122,97 @@ export const getOrderStats = async (req, res) => {
   }
 };
 
-/* ----------------- Manual checkout: create order from checkout (POST) ----------------- */
+/* ----------------- Manual checkout ----------------- */
 
 export const createOrderFromCheckout = async (req, res) => {
   try {
-    const { reference, customer, deliveryDate, deliveryTime } = req.body;
-    if (!reference) return res.status(400).json({ message: "Missing payment reference" });
+    const { reference, items: bodyItems, customer, totalAmount: bodyTotal, deliveryDate, deliveryTime } = req.body;
+    const userId = req.user?._id || req.user?.id || req.user;
 
-    const userId = req.user._id;
-
-    // Use Cart to build items if available (this keeps images/name/pack stored)
-    const cartItems = await Cart.find({ userId }).populate("drinkId");
-    if (!cartItems || cartItems.length === 0) {
-      return res.status(404).json({ message: "Cart is empty" });
+    if (!reference) {
+      return res.status(400).json({ message: "Missing payment reference" });
     }
 
-    let totalAmount = 0;
-    const items = cartItems.map((ci) => {
-      const selectedPack = ci.drinkId.packs?.find((p) => p._id?.toString() === (ci.packId?.toString() || "")) || ci.drinkId.packs?.[0];
-      const price = selectedPack?.price || 0;
-      totalAmount += price * ci.quantity;
+    let items = Array.isArray(bodyItems) && bodyItems.length ? bodyItems : null;
+    let totalAmount = bodyTotal ?? null;
 
-      return {
-        drinkId: ci.drinkId._id,
-        image: ci.drinkId.image || ci.drinkId.imageUrl || "",
-        name: ci.drinkId.name,
-        pack: selectedPack?.pack || null,
-        price,
-        quantity: ci.quantity,
-      };
+    if (!items) {
+      const cartItems = await Cart.find({ userId }).populate("drinkId");
+      if (!cartItems || cartItems.length === 0) {
+        return res.status(404).json({ message: "Cart is empty and no items were provided" });
+      }
+
+      totalAmount = 0;
+      items = cartItems.map((ci) => {
+        const selectedPack =
+          ci.drinkId?.packs?.find((p) => p._id?.toString() === (ci.packId?.toString() || "")) ||
+          ci.drinkId?.packs?.[0];
+
+        const price = selectedPack?.price || 0;
+        totalAmount += price * (ci.quantity || 1);
+
+        return {
+          drinkId: ci.drinkId._id,
+          image: ci.drinkId.image || ci.drinkId.imageUrl || "",
+          name: ci.drinkId.name,
+          pack: selectedPack?.pack || null,
+          price,
+          quantity: ci.quantity || 1,
+        };
+      });
+    }
+
+    if (!items || items.length === 0) return res.status(400).json({ message: "No items to create order" });
+    if (!totalAmount || totalAmount <= 0) return res.status(400).json({ message: "Invalid total amount" });
+
+    let order = await Order.findOne({ paystackReference: reference });
+    if (order) return res.status(200).json({ success: true, message: "Order already exists", order });
+
+    order = await Order.create({
+      userId,
+      customer: customer || {},
+      deliveryDate: deliveryDate || null,
+      deliveryTime: deliveryTime || null,
+      items,
+      totalAmount,
+      paystackReference: reference,
+      paymentStatus: "pending",
+      orderStatus: "confirmed",
     });
 
-    // Create order (avoid duplicates)
-    let order = await Order.findOne({ paystackReference: reference });
-    if (!order) {
-      order = await Order.create({
-        userId,
-        customer: customer || {}, // store provided customer object (fullName, email, phone, address...)
-        deliveryDate: deliveryDate || null,
-        deliveryTime: deliveryTime || null,
-        items,
-        totalAmount,
-        paystackReference: reference,
-        paymentStatus: "paid",
-        orderStatus: "confirmed",
-      });
-
-      // notify customer & admin
-      if (customer?.email) {
+    if (customer?.email) {
+      try {
         await sendEmail({
           to: customer.email,
-          subject: "Your Order is Confirmed ✅",
+          subject: "Your Order is Received — Payment Pending ⏳",
           html: `<p>Hi ${customer.fullName || "Customer"},</p>
-                 <p>Thank you for shopping with <strong>Duk's Juices</strong>. Your order <b>${order._id}</b> has been confirmed.</p>
+                 <p>Thanks for placing an order with Duk's Juices. We received your order <strong>${order._id}</strong>.</p>
                  <p><strong>Order summary:</strong></p>
                  <ul>
-                   ${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}
+                  ${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}
                  </ul>
                  <p><strong>Total:</strong> ₵${totalAmount}</p>
-                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}
-                 <p>We’ll notify you when the order is out for delivery. Thank you!</p>`,
+                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : "" }
+                 <p>We will notify you when payment is confirmed and your order is being prepared.</p>`,
         });
-      }
-
-      if (process.env.ADMIN_EMAIL) {
-        await sendEmail({
-          to: process.env.ADMIN_EMAIL,
-          subject: "New Order Received 🛒",
-          html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || req.user._id} (${customer?.email || "no-email"}). Total: ₵${totalAmount}</p>`,
-        });
+      } catch (err) {
+        console.warn("Failed to send order confirmation email:", err.message);
       }
     }
 
-    // Clear cart
-    await Cart.deleteMany({ userId });
+    if (process.env.ADMIN_EMAIL) {
+      try {
+        await sendEmail({
+          to: process.env.ADMIN_EMAIL,
+          subject: "New Order Initiated (Payment Pending)",
+          html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || userId} (${customer?.email || "no-email"}). Total: ₵${totalAmount}</p>`,
+        });
+      } catch (err) {
+        console.warn("Failed to notify admin:", err.message);
+      }
+    }
+
+    try { await Cart.deleteMany({ userId }); } catch (err) { console.warn("Failed to clear cart:", err.message); }
 
     res.status(201).json({ success: true, order });
   } catch (err) {
@@ -215,24 +225,21 @@ export const createOrderFromCheckout = async (req, res) => {
 
 export const webhookPayment = async (req, res) => {
   try {
-    // Helpful server log for debugging webhook receipts
-    console.log("💥 Paystack Webhook received at server:", new Date().toISOString());
+    console.log("💥 Paystack Webhook received at:", new Date().toISOString());
     console.log("📦 Payload:", req.body);
 
     const { event, data } = req.body;
     if (event !== "charge.success") return res.status(200).send("Ignored");
 
     const { reference, metadata, amount } = data;
-    // metadata must include: cart (items), customer (optional), deliveryDate/time (optional), userId
     const { cart, customer, deliveryDate, deliveryTime, userId } = metadata;
 
     if (!cart || !userId) {
-      console.warn("Webhook missing metadata.cart or metadata.userId — nothing to save");
+      console.warn("Webhook missing metadata.cart or metadata.userId");
       return res.status(400).send("Missing metadata");
     }
 
-    // Build items from metadata.cart (frontend must send full item objects)
-    const items = cart.map((item) => ({
+    const items = cart.map(item => ({
       drinkId: item.drinkId,
       image: item.image || item.imageUrl || "",
       name: item.name,
@@ -243,7 +250,6 @@ export const webhookPayment = async (req, res) => {
 
     const totalAmount = amount / 100;
 
-    // Avoid duplicate creation
     let order = await Order.findOne({ paystackReference: reference });
     if (!order) {
       order = await Order.create({
@@ -260,38 +266,38 @@ export const webhookPayment = async (req, res) => {
 
       console.log("🛍️ New Order Saved (webhook):", order._id);
 
-      // notify customer (if email in metadata or customer)
       const toEmail = (customer && customer.email) || (metadata && metadata.email) || null;
       if (toEmail) {
-        await sendEmail({
-          to: toEmail,
-          subject: "Your Order is Confirmed ✅",
-          html: `<p>Hi ${customer?.fullName || ""},</p>
-                 <p>Thanks for shopping with <strong>Duk's Juices</strong>. Your order <b>${order._id}</b> is confirmed.</p>
-                 <p><strong>Items:</strong></p>
-                 <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
-                 <p><strong>Total:</strong> ₵${totalAmount}</p>
-                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}
-                 <p>We’ll notify you when the order is out for delivery. Thank you!</p>`,
-        });
+        try {
+          await sendEmail({
+            to: toEmail,
+            subject: "Your Order is Confirmed ✅",
+            html: `<p>Hi ${customer?.fullName || ""},</p>
+                   <p>Thanks for shopping with Duk's Juices. Your order <b>${order._id}</b> is confirmed.</p>
+                   <p><strong>Items:</strong></p>
+                   <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
+                   <p><strong>Total:</strong> ₵${totalAmount}</p>
+                   ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : "" }
+                   <p>We’ll notify you when the order is out for delivery. Thank you!</p>`,
+          });
+        } catch (err) { console.warn("Email send failed:", err.message); }
       }
 
       if (process.env.ADMIN_EMAIL) {
-        await sendEmail({
-          to: process.env.ADMIN_EMAIL,
-          subject: "New Order Received 🛒",
-          html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || userId}.</p>
-                 <p>Total: ₵${totalAmount}</p>`,
-        });
+        try {
+          await sendEmail({
+            to: process.env.ADMIN_EMAIL,
+            subject: "New Order Received 🛒",
+            html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || userId}.</p>
+                   <p>Total: ₵${totalAmount}</p>`,
+          });
+        } catch (err) { console.warn("Admin email failed:", err.message); }
       }
     } else {
       console.log(`⚠️ Order already exists for reference ${reference}`);
     }
 
-    // Clear user's cart if they exist in DB (metadata.userId)
-    if (userId) {
-      await Cart.deleteMany({ userId });
-    }
+    try { await Cart.deleteMany({ userId }); } catch (err) { console.warn("Failed to clear user's cart from webhook:", err.message); }
 
     res.status(200).send("OK");
   } catch (err) {
