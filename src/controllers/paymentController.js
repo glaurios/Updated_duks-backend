@@ -1,11 +1,10 @@
 import axios from "axios";
 import Order from "../models/order.js";
 import Cart from "../models/cart.js";
-import User from "../models/user.js";
 import Drink from "../models/drink.js";
 import { sendEmail } from "../utils/Email.js";
 
-// 1️⃣ Initialize Payment
+// ---------------- 1️⃣ Initialize Payment ----------------
 export const initializePayment = async (req, res) => {
   try {
     const {
@@ -20,7 +19,7 @@ export const initializePayment = async (req, res) => {
 
     const userEmail = checkoutEmail || req.user.email;
 
-    // fetch server cart (authoritative)
+    // fetch authoritative cart
     const cartItems = await Cart.find({ userId: req.user._id }).populate({
       path: "drinkId",
       strictPopulate: false,
@@ -29,26 +28,24 @@ export const initializePayment = async (req, res) => {
     if (!cartItems || cartItems.length === 0)
       return res.status(400).json({ message: "Cart is empty" });
 
-    const validItems = cartItems.filter((item) => item.drinkId);
-    if (validItems.length === 0)
+    const validItems = cartItems.filter(item => item.drinkId);
+    if (!validItems.length)
       return res.status(400).json({ message: "No valid drinks in cart" });
 
-    // compute total using the selected pack for each cart item
     let total = 0;
-    const items = validItems.map((item) => {
+
+    const items = validItems.map(item => {
       const product = item.drinkId;
-
-      // find pack in the product's packs array that matches the cart item
       const packsArr = Array.isArray(product.packs) ? product.packs : [];
+
+      // case-insensitive pack matching
       const selectedPackObj =
-        packsArr.find((p) => String(p.pack) === String(item.pack)) || null;
+        packsArr.find(
+          p => String(p.pack).toLowerCase() === String(item.pack).toLowerCase()
+        ) || null;
 
-      // Price fallback logic
-      let price = typeof item.price === "number" ? item.price : null;
-      if (price === null) {
-        price = selectedPackObj?.price ?? product.price ?? 0;
-      }
-
+      // always take DB price, ignore item.price
+      const price = selectedPackObj?.price ?? product.price ?? 0;
       total += price * Number(item.quantity || 1);
 
       return {
@@ -61,9 +58,8 @@ export const initializePayment = async (req, res) => {
       };
     });
 
-    const amount = Math.round(total * 100); // paystack expects kobo/lowest denom
+    const amount = Math.round(total * 100); // Paystack expects lowest denom
 
-    // build customer
     const customer = {
       fullName: fullName || req.user.fullName || "Customer",
       email: userEmail,
@@ -109,7 +105,7 @@ export const initializePayment = async (req, res) => {
   }
 };
 
-// 2️⃣ Webhook receives payment success
+// ---------------- 2️⃣ Webhook Payment ----------------
 export const webhookPayment = async (req, res) => {
   try {
     console.log("💥 Paystack Webhook received:", new Date().toISOString());
@@ -125,32 +121,29 @@ export const webhookPayment = async (req, res) => {
     const userId = metadata?.userId;
 
     if (!userId) return res.status(400).send("Missing userId");
-    if (!itemsRaw || itemsRaw.length === 0) return res.status(400).send("No items in order");
+    if (!itemsRaw.length) return res.status(400).send("No items in order");
 
-    // Build final items array with price fallback
+    // rebuild items with DB price
     const items = await Promise.all(
-      itemsRaw.map(async (item) => {
-        if (!item.price || typeof item.price !== "number") {
-          const product = await Drink.findById(item.drinkId);
-          let price = typeof item.price === "number" ? item.price : null;
-          if (price === null) {
-            const packObj = product?.packs?.find((p) => String(p.pack) === String(item.pack));
-            price = packObj?.price ?? product?.price ?? 0;
-          }
-          return {
-            drinkId: item.drinkId,
-            name: item.name || product?.name || "Unknown product",
-            price,
-            quantity: item.quantity || 1,
-            pack: item.pack || null,
-            image: item.image || product?.image || product?.imageUrl || "",
-          };
-        }
-        return item;
+      itemsRaw.map(async item => {
+        const product = await Drink.findById(item.drinkId);
+        if (!product) return item; // fallback if product deleted
+
+        const packObj =
+          product.packs?.find(p => String(p.pack).toLowerCase() === String(item.pack).toLowerCase()) || null;
+        const price = packObj?.price ?? product.price ?? 0;
+
+        return {
+          drinkId: item.drinkId,
+          name: item.name || product.name,
+          price,
+          quantity: item.quantity || 1,
+          pack: item.pack || null,
+          image: item.image || product.image || product.imageUrl || "",
+        };
       })
     );
 
-    // Build customer object with fallbacks
     const customerFromMetadata = metadata?.customer || {};
     const customerFromOldFormat = {
       fullName: metadata?.fullName,
@@ -183,15 +176,13 @@ export const webhookPayment = async (req, res) => {
         customer,
       });
 
-      // Send emails
+      // send emails
       if (customer.email) {
         try {
           await sendEmail({
             to: customer.email,
             subject: "Your Order is Confirmed ✅",
-            html: `
-              <p>Hi ${customer.fullName}, your order ${order._id} is confirmed. Total: ₵${totalAmount}</p>
-            `,
+            html: `<p>Hi ${customer.fullName}, your order ${order._id} is confirmed. Total: ₵${totalAmount}</p>`,
           });
         } catch (err) { console.warn("Email failed:", err.message); }
       }
@@ -206,12 +197,9 @@ export const webhookPayment = async (req, res) => {
       }
     }
 
-    // Clear cart
-    try {
-      await Cart.deleteMany({ userId });
-    } catch (err) {
-      console.warn("Failed to clear cart:", err.message);
-    }
+    // clear cart
+    try { await Cart.deleteMany({ userId }); } 
+    catch (err) { console.warn("Failed to clear cart:", err.message); }
 
     res.status(200).send("OK");
   } catch (error) {
@@ -220,7 +208,7 @@ export const webhookPayment = async (req, res) => {
   }
 };
 
-// 3️⃣ Verify Payment
+// ---------------- 3️⃣ Verify Payment ----------------
 export const verifyPayment = async (req, res) => {
   try {
     const { reference } = req.params;
@@ -237,30 +225,27 @@ export const verifyPayment = async (req, res) => {
     const userId = metadata.userId;
     const itemsRaw = metadata.items || [];
 
-    // Build final items array with price fallback
+    // rebuild items with DB price
     const items = await Promise.all(
-      itemsRaw.map(async (item) => {
-        if (!item.price || typeof item.price !== "number") {
-          const product = await Drink.findById(item.drinkId);
-          let price = typeof item.price === "number" ? item.price : null;
-          if (price === null) {
-            const packObj = product?.packs?.find((p) => String(p.pack) === String(item.pack));
-            price = packObj?.price ?? product?.price ?? 0;
-          }
-          return {
-            drinkId: item.drinkId,
-            name: item.name || product?.name || "Unknown product",
-            price,
-            quantity: item.quantity || 1,
-            pack: item.pack || null,
-            image: item.image || product?.image || product?.imageUrl || "",
-          };
-        }
-        return item;
+      itemsRaw.map(async item => {
+        const product = await Drink.findById(item.drinkId);
+        if (!product) return item;
+
+        const packObj =
+          product.packs?.find(p => String(p.pack).toLowerCase() === String(item.pack).toLowerCase()) || null;
+        const price = packObj?.price ?? product.price ?? 0;
+
+        return {
+          drinkId: item.drinkId,
+          name: item.name || product.name,
+          price,
+          quantity: item.quantity || 1,
+          pack: item.pack || null,
+          image: item.image || product.image || product.imageUrl || "",
+        };
       })
     );
 
-    // Customer fallback
     const customerFromMetadata = metadata?.customer || {};
     const customerFromOldFormat = {
       fullName: metadata?.fullName,
