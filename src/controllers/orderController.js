@@ -138,7 +138,7 @@ export const createOrderFromCheckout = async (req, res) => {
 
     const userId = req.user._id;
 
-    // Use Cart to build items if available (this keeps images/name/pack stored)
+    // Fetch cart items for the user
     const cartItems = await Cart.find({ userId }).populate("drinkId");
     if (!cartItems || cartItems.length === 0) {
       return res.status(404).json({ message: "Cart is empty" });
@@ -146,7 +146,8 @@ export const createOrderFromCheckout = async (req, res) => {
 
     let totalAmount = 0;
     const items = cartItems.map((ci) => {
-      const selectedPack = ci.drinkId.packs?.find((p) => p._id?.toString() === (ci.packId?.toString() || "")) || ci.drinkId.packs?.[0];
+      // Select the correct pack using ci.pack
+      const selectedPack = ci.drinkId.packs?.find(p => p.pack === ci.pack) || ci.drinkId.packs?.[0];
       const price = selectedPack?.price || 0;
       totalAmount += price * ci.quantity;
 
@@ -160,12 +161,12 @@ export const createOrderFromCheckout = async (req, res) => {
       };
     });
 
-    // Create order (avoid duplicates)
+    // Avoid duplicate orders
     let order = await Order.findOne({ paystackReference: reference });
     if (!order) {
       order = await Order.create({
         userId,
-        customer: customer || {}, // store provided customer object (fullName, email, phone, address...)
+        customer: customer || {},
         deliveryDate: deliveryDate || null,
         deliveryTime: deliveryTime || null,
         items,
@@ -175,33 +176,30 @@ export const createOrderFromCheckout = async (req, res) => {
         orderStatus: "confirmed",
       });
 
-      // notify customer & admin
+      // Notify customer
       if (customer?.email) {
         await sendEmail({
           to: customer.email,
           subject: "Your Order is Confirmed ✅",
           html: `<p>Hi ${customer.fullName || "Customer"},</p>
-                 <p>Thank you for shopping with <strong>Duk's Juices</strong>. Your order <b>${order._id}</b> has been confirmed.</p>
-                 <p><strong>Order summary:</strong></p>
-                 <ul>
-                   ${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}
-                 </ul>
+                 <p>Your order <b>${order._id}</b> has been confirmed. Thank you for shopping with Duk's Juices!</p>
+                 <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
                  <p><strong>Total:</strong> ₵${totalAmount}</p>
-                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}
-                 <p>We’ll notify you when the order is out for delivery. Thank you!</p>`,
+                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}`
         });
       }
 
+      // Notify admin
       if (process.env.ADMIN_EMAIL) {
         await sendEmail({
           to: process.env.ADMIN_EMAIL,
           subject: "New Order Received 🛒",
-          html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || req.user._id} (${customer?.email || "no-email"}). Total: ₵${totalAmount}</p>`,
+          html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || req.user._id} (${customer?.email || "no-email"}). Total: ₵${totalAmount}</p>`
         });
       }
     }
 
-    // Clear cart
+    // Clear user's cart
     await Cart.deleteMany({ userId });
 
     res.status(201).json({ success: true, order });
@@ -215,15 +213,13 @@ export const createOrderFromCheckout = async (req, res) => {
 
 export const webhookPayment = async (req, res) => {
   try {
-    // Helpful server log for debugging webhook receipts
-    console.log("💥 Paystack Webhook received at server:", new Date().toISOString());
+    console.log("💥 Paystack Webhook received:", new Date().toISOString());
     console.log("📦 Payload:", req.body);
 
     const { event, data } = req.body;
     if (event !== "charge.success") return res.status(200).send("Ignored");
 
     const { reference, metadata, amount } = data;
-    // metadata must include: cart (items), customer (optional), deliveryDate/time (optional), userId
     const { cart, customer, deliveryDate, deliveryTime, userId } = metadata;
 
     if (!cart || !userId) {
@@ -231,8 +227,8 @@ export const webhookPayment = async (req, res) => {
       return res.status(400).send("Missing metadata");
     }
 
-    // Build items from metadata.cart (frontend must send full item objects)
-    const items = cart.map((item) => ({
+    let totalAmount = amount / 100;
+    const items = cart.map(item => ({
       drinkId: item.drinkId,
       image: item.image || item.imageUrl || "",
       name: item.name,
@@ -241,9 +237,7 @@ export const webhookPayment = async (req, res) => {
       quantity: item.quantity,
     }));
 
-    const totalAmount = amount / 100;
-
-    // Avoid duplicate creation
+    // Avoid duplicate orders
     let order = await Order.findOne({ paystackReference: reference });
     if (!order) {
       order = await Order.create({
@@ -260,38 +254,32 @@ export const webhookPayment = async (req, res) => {
 
       console.log("🛍️ New Order Saved (webhook):", order._id);
 
-      // notify customer (if email in metadata or customer)
+      // Notify customer
       const toEmail = (customer && customer.email) || (metadata && metadata.email) || null;
       if (toEmail) {
         await sendEmail({
           to: toEmail,
           subject: "Your Order is Confirmed ✅",
           html: `<p>Hi ${customer?.fullName || ""},</p>
-                 <p>Thanks for shopping with <strong>Duk's Juices</strong>. Your order <b>${order._id}</b> is confirmed.</p>
-                 <p><strong>Items:</strong></p>
+                 <p>Your order <b>${order._id}</b> has been confirmed.</p>
                  <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
                  <p><strong>Total:</strong> ₵${totalAmount}</p>
-                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}
-                 <p>We’ll notify you when the order is out for delivery. Thank you!</p>`,
+                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}`
         });
       }
 
+      // Notify admin
       if (process.env.ADMIN_EMAIL) {
         await sendEmail({
           to: process.env.ADMIN_EMAIL,
           subject: "New Order Received 🛒",
-          html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || userId}.</p>
-                 <p>Total: ₵${totalAmount}</p>`,
+          html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || userId}. Total: ₵${totalAmount}</p>`
         });
       }
-    } else {
-      console.log(`⚠️ Order already exists for reference ${reference}`);
     }
 
-    // Clear user's cart if they exist in DB (metadata.userId)
-    if (userId) {
-      await Cart.deleteMany({ userId });
-    }
+    // Clear user's cart
+    await Cart.deleteMany({ userId });
 
     res.status(200).send("OK");
   } catch (err) {
