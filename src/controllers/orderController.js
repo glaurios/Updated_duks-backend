@@ -258,13 +258,10 @@ export const webhookPayment = async (req, res) => {
       const toEmail = (customer && customer.email) || (metadata && metadata.email) || null;
       if (toEmail) {
         await sendEmail({
-          to: toEmail,
-          subject: "Your Order is Confirmed ✅",
-          html: `<p>Hi ${customer?.fullName || ""},</p>
-                 <p>Your order <b>${order._id}</b> has been confirmed.</p>
-                 <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
-                 <p><strong>Total:</strong> ₵${totalAmount}</p>
-                 ${deliveryDate ? `<p><strong>Delivery:</strong> ${deliveryDate} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}`
+          to: metadata.email || "", 
+          subject: "Order Confirmed ✅",
+          html: `<p>Your order <b>${reference}</b> has been successfully placed and confirmed.</p>
+                 <p>Total Amount: GHS ${totalAmount}</p>`
         });
       }
 
@@ -276,6 +273,23 @@ export const webhookPayment = async (req, res) => {
           html: `<p>New order <b>${order._id}</b> placed by ${customer?.fullName || userId}. Total: ₵${totalAmount}</p>`
         });
       }
+
+      // ✅ Clear entire cart for user
+      await Cart.deleteMany({ userId });
+      console.log(`🧹 Cart cleared for user ${userId}`);
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.status(500).send("Server error");
+  }
+};
+
+
+      // Clear cart
+      await Cart.findOneAndUpdate({ userId }, { items: [] });
+      console.log(`🧹 Cart cleared for user ${userId}`);
     }
 
     // Clear user's cart
