@@ -32,12 +32,13 @@ router.get("/my-orders", authMiddleware, getUserOrders);
 // Cancel an order (Only user who owns it)
 router.put("/:id/cancel", authMiddleware, cancelOrder);
 
-// Get specific order by ID (only owner or admin)
-router.get("/:id", authMiddleware, getOrderById);
+
 
 /* ============== ADMIN ROUTES ============== */
 router.get("/", authMiddleware, isAdmin, getAllOrders);
 router.put("/:id/status", authMiddleware, isAdmin, updateOrderStatus);
 router.get("/stats", authMiddleware, isAdmin, getOrderStats);
+
+router.get("/:id", authMiddleware, getOrderById);
 
 export default router;
