@@ -11,7 +11,7 @@ import drinkRoutes from "./routes/drink.js";
 import cartRoutes from "./routes/cart.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import orderRoutes from "./routes/orders.js";
-import testEmailRoutes from "./routes/testEmail.js"
+import testEmailRoutes from "./routes/testEmail.js";
 
 dotenv.config();
 
@@ -26,9 +26,21 @@ const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
 // CORS setup
+const allowedOrigins = [
+  "http://localhost:8080",   // Local dev
+  "https://durks.vercel.app" // Production frontend (no trailing slash)
+];
+
 app.use(
   cors({
-    origin: "*",
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // Allow Postman or mobile apps
+      if (allowedOrigins.indexOf(origin) === -1) {
+        const msg = `CORS policy: The origin ${origin} is not allowed.`;
+        return callback(new Error(msg), false);
+      }
+      return callback(null, true);
+    },
     credentials: true,
   })
 );
