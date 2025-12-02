@@ -107,6 +107,7 @@ export const webhookPayment = async (req, res) => {
       console.log(`Ignoring event: ${event}`);
       return res.status(200).send("Event ignored");
     }
+      
 
     const { reference, metadata, amount, customer: paystackCustomer } = data;
     

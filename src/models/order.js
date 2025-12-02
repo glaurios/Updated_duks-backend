@@ -6,16 +6,16 @@ const orderSchema = new mongoose.Schema(
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      required: false, // allow guest orders if needed
     },
 
     customer: {
-      fullName: { type: String, required: true },
-      email: { type: String, required: true },
-      phone: { type: String,},
-      address: { type: String,},
+      fullName: { type: String, default: "" },
+      email: { type: String, default: "" },
+      phone: { type: String, default: "" },
+      address: { type: String, default: "" },
       city: { type: String, default: "" },
-      country: { type: String, default: "Ghana" }, // optional
+      country: { type: String, default: "Ghana" },
     },
 
     items: [
@@ -25,7 +25,7 @@ const orderSchema = new mongoose.Schema(
           ref: "Drink",
           required: true,
         },
-        image: { type: String },
+        image: { type: String, default: "" },
         name: { type: String, required: true },
         pack: { type: String }, // like 500ml, 1L
         price: { type: Number, required: true },
@@ -33,12 +33,13 @@ const orderSchema = new mongoose.Schema(
       },
     ],
 
-    deliveryDate: { type: String, default: null }, // store as ISO string
+    deliveryDate: { type: Date, default: null }, // store as Date for clarity
     deliveryTime: { type: String, default: null },
 
     totalAmount: { type: Number, required: true },
 
     paystackReference: { type: String, required: true, unique: true },
+
     paymentStatus: {
       type: String,
       enum: ["pending", "paid", "refunded"],
@@ -49,6 +50,9 @@ const orderSchema = new mongoose.Schema(
       enum: ["confirmed", "processing", "completed", "cancelled"],
       default: "confirmed",
     },
+
+    orderNumber: { type: String, index: true, unique: true }, // "000001"
+    vendor: { type: String, default: "" }, // e.g. "jumia"
   },
   { timestamps: true }
 );
