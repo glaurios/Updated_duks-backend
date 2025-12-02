@@ -8,18 +8,17 @@ export const addToCart = async (req, res) => {
     const userId = req.user._id;
 
     quantity = Number(quantity);
+    if (quantity < 1) return res.status(400).json({ message: "Quantity must be at least 1" });
 
     const drink = await Drink.findById(drinkId);
     if (!drink) return res.status(404).json({ message: "Drink not found" });
 
     // Default to first available pack if not provided
-    if (!pack) {
-      pack = drink.packs?.[0]?.pack;
-    }
-    pack = Number(pack);
+    if (!pack) pack = drink.packs?.[0]?.pack;
+    pack = String(pack); // Keep pack as string
 
-    if (!drinkId || isNaN(pack) || quantity < 1) {
-      return res.status(400).json({ message: "Invalid drink, pack, or quantity" });
+    if (!drinkId || !pack) {
+      return res.status(400).json({ message: "Invalid drink or pack" });
     }
 
     const cartItem = await Cart.findOneAndUpdate(
@@ -41,16 +40,19 @@ export const getCartItems = async (req, res) => {
     const userId = req.user._id;
     const cartItems = await Cart.find({ userId }).populate("drinkId");
 
-    const result = cartItems.map((item) => ({
-      id: item._id,
-      drinkId: item.drinkId._id,
-      name: item.drinkId.name,
-      price: item.drinkId.packs?.find(p => p.pack === item.pack)?.price || 0,
-      qty: item.quantity,
-      packs: item.drinkId.packs,
-      pack: item.pack,
-      image: item.drinkId.imageUrl || "",
-    }));
+    const result = cartItems.map((item) => {
+      const price = item.drinkId.packs?.find(p => p.pack === item.pack)?.price || 0;
+      return {
+        id: item._id,
+        drinkId: item.drinkId._id,
+        name: item.drinkId.name,
+        price,
+        qty: item.quantity,
+        packs: item.drinkId.packs,
+        pack: item.pack,
+        image: item.drinkId.imageUrl || item.drinkId.image || "",
+      };
+    });
 
     res.json({ cartItems: result });
   } catch (err) {
@@ -109,8 +111,8 @@ export const updateCartItemPack = async (req, res) => {
     let { pack } = req.body;
     const userId = req.user._id;
 
-    pack = Number(pack);
-    if (isNaN(pack)) return res.status(400).json({ message: "Invalid pack value" });
+    pack = String(pack); // Keep pack as string
+    if (!pack) return res.status(400).json({ message: "Invalid pack value" });
 
     const cartItem = await Cart.findById(id);
     if (!cartItem) return res.status(404).json({ message: "Cart item not found" });
@@ -134,8 +136,6 @@ export const updateCartItemPack = async (req, res) => {
   }
 };
 
-
-
 // ---------------- Add multiple items to cart (Batch) ----------------
 export const addManyToCart = async (req, res) => {
   try {
@@ -150,18 +150,15 @@ export const addManyToCart = async (req, res) => {
 
     for (const item of items) {
       let { drinkId, quantity = 1, pack } = item;
-
       quantity = Number(quantity);
 
       const drink = await Drink.findById(drinkId);
       if (!drink) continue;
 
-      if (!pack) {
-        pack = drink.packs?.[0]?.pack;
-      }
-      pack = Number(pack);
+      if (!pack) pack = drink.packs?.[0]?.pack;
+      pack = String(pack); // Keep pack as string
 
-      if (!drinkId || isNaN(pack) || quantity < 1) continue;
+      if (!drinkId || !pack || quantity < 1) continue;
 
       const cartItem = await Cart.findOneAndUpdate(
         { userId, drinkId, pack },
@@ -181,4 +178,3 @@ export const addManyToCart = async (req, res) => {
     res.status(500).json({ message: "Server error", error: err.message });
   }
 };
-
