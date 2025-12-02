@@ -8,11 +8,18 @@ import {
   cancelOrder,
   getOrderStats,
   createOrderFromCheckout,
-  webhookPayment
+  webhookPayment,
 } from "../controllers/orderController.js";
 import { authMiddleware, isAdmin } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
+
+/* ============== WEBHOOK (PUBLIC) ============== */
+/*
+  Important: webhook must be registered before any ':id' routes
+  because '/webhook' would otherwise match '/:id' and get intercepted.
+*/
+router.post("/webhook", express.json({ type: "*/*" }), webhookPayment);
 
 /* ============== CUSTOMER ROUTES ============== */
 
@@ -22,19 +29,15 @@ router.post("/paystack/callback", authMiddleware, createOrderFromCheckout);
 // Get logged-in user's orders
 router.get("/my-orders", authMiddleware, getUserOrders);
 
-// Get specific order by ID (only owner or admin)
-router.get("/:id", authMiddleware, getOrderById);
-
 // Cancel an order (Only user who owns it)
 router.put("/:id/cancel", authMiddleware, cancelOrder);
+
+// Get specific order by ID (only owner or admin)
+router.get("/:id", authMiddleware, getOrderById);
 
 /* ============== ADMIN ROUTES ============== */
 router.get("/", authMiddleware, isAdmin, getAllOrders);
 router.put("/:id/status", authMiddleware, isAdmin, updateOrderStatus);
 router.get("/stats", authMiddleware, isAdmin, getOrderStats);
-
-/* ============== WEBHOOK (PUBLIC ROUTE) ============== */
-// Paystack↔Server automated callback
-router.post("/webhook", webhookPayment);
 
 export default router;
