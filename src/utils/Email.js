@@ -1,12 +1,12 @@
 import nodemailer from "nodemailer";
 
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST, // e.g., smtp.gmail.com
+  host: process.env.SMTP_HOST,
   port: 465,
-  secure: true, // true for 465, false for other ports
+  secure: true,
   auth: {
-    user: process.env.SMTP_USER, // your email
-    pass: process.env.SMTP_PASS, // your email password or app password
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
   },
 });
 
@@ -19,7 +19,9 @@ export const sendEmail = async ({ to, subject, html }) => {
       html,
     });
     console.log("📧 Email sent:", info.messageId);
+    return info;
   } catch (err) {
     console.error("❌ Email failed:", err);
+    throw err; // ← ADD THIS LINE
   }
 };

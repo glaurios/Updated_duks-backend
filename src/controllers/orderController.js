@@ -1,7 +1,7 @@
 // src/controllers/orderController.js
 import Order from "../models/order.js";
 import Cart from "../models/cart.js";
-import drinks from "../models/drinks.js";
+import Drink from "../models/drinks.js";
 import { sendEmail } from "../utils/Email.js";
 import { getNextOrderNumber } from "../utils/orderNumber.js";
 
@@ -74,7 +74,7 @@ export const updateOrderStatus = async (req, res) => {
                  <p>Your order <strong>${order.orderNumber}</strong> has been marked as <strong>Completed</strong>.</p>`,
         });
       } catch (err) {
-        console.warn("Failed to send completion email:", err.message);
+        console.warn("Failed to send completion email:", err.message || err);
       }
     }
 
@@ -111,7 +111,7 @@ export const cancelOrder = async (req, res) => {
                  <p>Your order <strong>${order.orderNumber}</strong> has been cancelled.</p>`,
         });
       } catch (err) {
-        console.warn("Failed to send cancel email:", err.message);
+        console.warn("Failed to send cancel email:", err.message || err);
       }
     }
 
@@ -139,7 +139,7 @@ export const getOrderStats = async (req, res) => {
   }
 };
 
-/* ----------------- Create Order (Checkout / Webhook) ----------------- */
+/* ----------------- Create Order (Checkout) ----------------- */
 export const createOrderFromCheckout = async (req, res) => {
   try {
     const {
@@ -161,26 +161,32 @@ export const createOrderFromCheckout = async (req, res) => {
     let totalAmount = typeof bodyTotal === "number" ? bodyTotal : 0;
 
     if (items) {
-      // Ensure each item has name, image, price, quantity
+      // Ensure each item has name, image, price, quantity (and correct pack math)
       let computedTotal = 0;
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         if (!it.drinkId) return res.status(400).json({ message: `Item ${i} missing drinkId` });
 
-        if (!it.name || !it.image || typeof it.price !== "number") {
-          const product = await Drink.findById(it.drinkId);
-          if (!product) return res.status(404).json({ message: `Product ${it.drinkId} not found` });
+        // ensure pack price is correct by reading from DB
+        const product = await Drink.findById(it.drinkId);
+        if (!product) return res.status(404).json({ message: `Product ${it.drinkId} not found` });
 
-          items[i].name = items[i].name || product.name;
-          items[i].image = items[i].image || product.image || product.imageUrl || "";
+        // find selected pack by pack number
+        const selectedPack =
+          product.packs?.find((p) => Number(p.pack) === Number(it.pack)) || product.packs?.[0];
 
-          if (typeof items[i].price !== "number" || items[i].price === 0) {
-            const selectedPack =
-              product.packs?.find((p) => String(p.pack) === String(items[i].pack)) || product.packs?.[0];
-            items[i].price = selectedPack?.price || 0;
-          }
+        // set price as price for one pack unit
+        const unitPrice = selectedPack?.price || 0;
+
+        // fill missing fields
+        items[i].name = items[i].name || product.name;
+        items[i].image = items[i].image || product.image || product.imageUrl || "";
+        // if price missing or invalid, set to pack unit price
+        if (typeof items[i].price !== "number" || items[i].price === 0) {
+          items[i].price = unitPrice;
         }
         items[i].quantity = items[i].quantity || 1;
+
         computedTotal += items[i].price * items[i].quantity;
       }
       if (!bodyTotal) totalAmount = computedTotal;
@@ -189,21 +195,30 @@ export const createOrderFromCheckout = async (req, res) => {
       const cartItems = await Cart.find({ userId }).populate("drinkId");
       if (!cartItems.length) return res.status(404).json({ message: "Cart is empty" });
 
-      items = cartItems.map((ci) => {
+      let computedTotal = 0;
+      const builtItems = [];
+      for (const ci of cartItems) {
         const product = ci.drinkId;
+        if (!product) continue;
+
         const selectedPack =
-          product.packs?.find((p) => String(p.pack) === String(ci.pack)) || product.packs?.[0];
-        const price = selectedPack?.price || 0;
-        totalAmount += price * ci.quantity;
-        return {
+          product.packs?.find((p) => Number(p.pack) === Number(ci.pack)) || product.packs?.[0];
+        const unitPrice = selectedPack?.price || 0;
+        const qty = ci.quantity || 1;
+
+        builtItems.push({
           drinkId: product._id,
           name: product.name,
           image: product.image || product.imageUrl || "",
           pack: selectedPack?.pack || null,
-          price,
-          quantity: ci.quantity,
-        };
-      });
+          price: unitPrice,
+          quantity: qty,
+        });
+
+        computedTotal += unitPrice * qty;
+      }
+      items = builtItems;
+      if (!bodyTotal) totalAmount = computedTotal;
     }
 
     if (!items.length) return res.status(400).json({ message: "No items to create order" });
@@ -242,11 +257,10 @@ export const createOrderFromCheckout = async (req, res) => {
                  <p><strong>Items:</strong></p>
                  <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
                  <p><strong>Total:</strong> ₵${totalAmount}</p>
-                 ${parsedDeliveryDate ? `<p><strong>Delivery:</strong> ${parsedDeliveryDate.toISOString().slice(0,10)} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}
-                 <p>We will notify you when payment is confirmed and your order is being prepared.</p>`,
+                 ${parsedDeliveryDate ? `<p><strong>Delivery:</strong> ${parsedDeliveryDate.toISOString().slice(0,10)} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}`
         });
       } catch (err) {
-        console.warn("Customer email failed:", err.message);
+        console.warn("Customer email failed:", err.message || err);
       }
     }
 
@@ -260,7 +274,7 @@ export const createOrderFromCheckout = async (req, res) => {
                  <p>Total: ₵${totalAmount}</p>`,
         });
       } catch (err) {
-        console.warn("Admin email failed:", err.message);
+        console.warn("Admin email failed:", err.message || err);
       }
     }
 
@@ -268,13 +282,13 @@ export const createOrderFromCheckout = async (req, res) => {
     try {
       await Cart.deleteMany({ userId });
     } catch (err) {
-      console.warn("Failed to clear cart:", err.message);
+      console.warn("Failed to clear cart:", err.message || err);
     }
 
     res.status(201).json({ success: true, order });
   } catch (err) {
     console.error("Create order error:", err);
-    res.status(500).json({ message: "Failed to create order", error: err.message });
+    res.status(500).json({ message: "Failed to create order", error: err.message || err });
   }
 };
 
@@ -289,33 +303,30 @@ export const webhookPayment = async (req, res) => {
 
     if (!cart || !userId) return res.status(400).send("Missing metadata");
 
-    const items = await Promise.all(
-      cart.map(async (item) => {
-        if (!item.name || !item.image || typeof item.price !== "number") {
-          const product = await Drink.findById(item.drinkId);
-          return {
-            drinkId: item.drinkId,
-            image: item.image || product?.image || product?.imageUrl || "",
-            name: item.name || product?.name || "Unknown product",
-            pack: item.pack || null,
-            price: typeof item.price === "number" ? item.price : product?.packs?.[0]?.price || 0,
-            quantity: item.quantity || 1,
-          };
-        }
-        return {
-          drinkId: item.drinkId,
-          image: item.image || "",
-          name: item.name,
-          pack: item.pack || null,
-          price: item.price,
-          quantity: item.quantity || 1,
-        };
-      })
-    );
+    const items = [];
+    let totalAmount = 0;
 
-    const totalAmount = (amount || 0) / 100;
+    for (const item of cart) {
+      const drink = await Drink.findById(item.drinkId);
+      if (!drink) continue;
+
+      const selectedPack = drink.packs?.find(p => Number(p.pack) === Number(item.pack)) || drink.packs?.[0];
+      const unitPrice = selectedPack?.price || 0;
+      const quantity = item.quantity || 1;
+      const subtotal = unitPrice * quantity;
+      totalAmount += subtotal;
+
+      items.push({
+        drinkId: drink._id,
+        name: drink.name,
+        image: drink.imageUrl || drink.image || "",
+        pack: selectedPack?.pack || null,
+        price: unitPrice,
+        quantity,
+      });
+    }
+
     let order = await Order.findOne({ paystackReference: reference });
-
     if (!order) {
       const customer = sanitizeCustomer(rawCustomer || {});
       const orderNumber = await getNextOrderNumber();
@@ -347,7 +358,7 @@ export const webhookPayment = async (req, res) => {
                    <p>Total: ₵${totalAmount}</p>`,
           });
         } catch (err) {
-          console.warn("Customer email failed:", err.message);
+          console.warn("Customer email failed:", err.message || err);
         }
       }
 
@@ -361,7 +372,7 @@ export const webhookPayment = async (req, res) => {
                    <p>Total: ₵${totalAmount}</p>`,
           });
         } catch (err) {
-          console.warn("Admin email failed:", err.message);
+          console.warn("Admin email failed:", err.message || err);
         }
       }
     }
@@ -370,7 +381,7 @@ export const webhookPayment = async (req, res) => {
     try {
       await Cart.deleteMany({ userId });
     } catch (err) {
-      console.warn("Failed to clear user's cart:", err.message);
+      console.warn("Failed to clear user's cart:", err.message || err);
     }
 
     res.status(200).send("OK");
