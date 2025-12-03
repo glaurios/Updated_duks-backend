@@ -7,6 +7,7 @@ import {
   updateCartItemQuantity,
   updateCartItemPack,
   addManyToCart,
+  clearCart,
 } from "../controllers/cartController.js";
 
 const router = express.Router();
@@ -17,5 +18,7 @@ router.get("/", authMiddleware, getCartItems);
 router.delete("/:id", authMiddleware, removeFromCart);
 router.patch("/:id/quantity", authMiddleware, updateCartItemQuantity);
 router.patch("/:id/pack", authMiddleware, updateCartItemPack);
+router.delete("/cart", authMiddleware, clearCart);
+
 
 export default router;
