@@ -182,3 +182,19 @@ export const addManyToCart = async (req, res) => {
   }
 };
 
+
+// ---------------- Clear entire cart ----------------
+export const clearCart = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    await Cart.deleteMany({ userId });
+
+    res.json({ message: "Cart cleared successfully" });
+  } catch (err) {
+    console.error("❌ Clear cart error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+};
+
+
