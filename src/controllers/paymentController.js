@@ -106,7 +106,7 @@ export const initializePayment = async (req, res) => {
 // ===============================================
 // 2️⃣ Webhook: Paystack -> Backend (Auto Order)
 // ===============================================
-export const webhookPayment = async (req, res) => {
+export const  webhookPayment = async (req, res) => {
   try {
     console.log("💥 Paystack webhook received (raw body):", JSON.stringify(req.body || {}, null, 2));
     const { event, data } = req.body || {};

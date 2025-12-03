@@ -6,9 +6,9 @@ import { authMiddleware } from "../middleware/authMiddleware.js";
 const router = express.Router();
 
 // Payments
+router.post("/webhook", express.raw({ type: "*/*" }), webhookPayment);
 router.post("/initialize", authMiddleware, initializePayment);
 router.get("/verify/:reference", verifyPayment);
-router.post("/webhook", webhookPayment);
 
 // Orders
 router.get("/user/:userId", authMiddleware, getUserOrders);
