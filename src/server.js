@@ -28,7 +28,7 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 // ---------------- Dynamic CORS ----------------
 const allowedOrigins = [
   "http://localhost:8080",        // local frontend
-  "https://durks.vercel.app"      // production frontend
+  "https://www.duksjuice.com"      // production frontend
 ];
 
 app.use(cors({
