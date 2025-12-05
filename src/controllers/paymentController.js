@@ -316,8 +316,7 @@ export const  webhookPayment = async (req, res) => {
                   </div>
                   <div style="text-align:right;">
                     <p style="margin:0;font-size:18px;font-weight:700;">₵${totalAmount.toFixed(2)}</p>
-                    <a href="https://youradmin.com/orders/${order._id}" style="display:inline-block;margin-top:8px;padding:10px 14px;background:#0f5132;color:#fff;border-radius:6px;text-decoration:none;">View Order</a>
-                  </div>
+    
                 </div>
                 <p style="margin-top:20px;font-size:12px;color:#666;">This is an automated notification. Log into the admin dashboard to manage the order.</p>
               </div>
