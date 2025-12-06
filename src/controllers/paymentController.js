@@ -18,13 +18,12 @@ const logEvent = (event, data) => {
 
 // Verify Paystack webhook signature
 const verifyPaystackSignature = (req) => {
-  const hash = crypto
-    .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
-    .update(JSON.stringify(req.body))
-    .digest("hex");
-  return hash === req.headers["x-paystack-signature"];
+  // req.body will be a Buffer because you used express.raw() on this route
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+  const hash = crypto.createHmac("sha512", process.env.PAYSTACK_SECRET_KEY).update(raw).digest("hex");
+  const header = (req.headers["x-paystack-signature"] || req.headers["X-Paystack-Signature"] || "").toString();
+  return hash === header;
 };
-
 // Validate customer data
 const validateCustomer = (customer) => {
   const errors = [];
@@ -391,13 +390,20 @@ export const initializePayment = async (req, res) => {
 
 /* ==================== 2. PAYSTACK WEBHOOK ==================== */
 export const webhookPayment = async (req, res) => {
-  try {
-    // CRITICAL: Verify webhook signature
+ try {
+    // Parse raw body into JSON (safe because express.raw used for this route)
+    let payload;
+    if (Buffer.isBuffer(req.body)) {
+      payload = JSON.parse(req.body.toString("utf8"));
+    } else if (typeof req.body === "string") {
+      payload = JSON.parse(req.body);
+    } else {
+      payload = req.body;
+    }
+
+    // verify signature using raw bytes
     if (!verifyPaystackSignature(req)) {
-      logEvent("WEBHOOK_INVALID_SIGNATURE", {
-        ip: req.ip,
-        headers: req.headers,
-      });
+      logEvent("WEBHOOK_INVALID_SIGNATURE", { ip: req.ip, headers: req.headers });
       return res.status(401).send("Invalid signature");
     }
 
