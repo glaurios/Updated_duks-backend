@@ -28,7 +28,7 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 // ---------------- Dynamic CORS ----------------
 const allowedOrigins = [
   "http://localhost:8080",        // local frontend
-  "https://www.duksjuice.com"      // production frontend
+  "https://www.duksjuice.com"     // production frontend
 ];
 
 app.use(cors({
@@ -43,6 +43,10 @@ app.use(cors({
   },
   credentials: true,
 }));
+
+// ⚠️ CRITICAL: Webhook route MUST be configured BEFORE express.json()
+// This allows Paystack webhook to receive raw body for signature verification
+app.use("/api/payments/webhook", express.raw({ type: "application/json" }));
 
 // ---------------- Middleware ----------------
 app.use(express.json());
@@ -96,4 +100,10 @@ mongoose
 
 // ---------------- Start server ----------------
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📍 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`🔗 Webhook URL: http://localhost:${PORT}/api/payments/webhook`);
+});
+
+export default app;

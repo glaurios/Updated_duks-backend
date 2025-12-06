@@ -1,392 +1,441 @@
 // src/controllers/orderController.js
 import Order from "../models/order.js";
-import Cart from "../models/cart.js";
-import Drink from "../models/drinks.js";
 import { sendEmail } from "../utils/Email.js";
-import { getNextOrderNumber } from "../utils/orderNumber.js";
 
-/* ----------------- Helpers ----------------- */
-const sanitizeCustomer = (input = {}) => ({
-  fullName: (input.fullName || "").replace(/\bnull\b/gi, "").trim(),
-  email: (input.email || "").replace(/\bnull\b/gi, "").trim(),
-  phone: (input.phone || "").replace(/\bnull\b/gi, "").trim(),
-  address: (input.address || "").replace(/\bnull\b/gi, "").trim(),
-  city: (input.city || "").replace(/\bnull\b/gi, "").trim(),
-  country: (input.country || "Ghana").replace(/\bnull\b/gi, "").trim(),
-});
+/* ==================== HELPERS ==================== */
 
-/* ----------------- Admin & User routes ----------------- */
-export const getAllOrders = async (req, res) => {
-  try {
-    const orders = await Order.find()
-      .sort({ createdAt: -1 })
-      .populate("userId", "email name");
-    res.json({ orders });
-  } catch (err) {
-    console.error("Get all orders error:", err);
-    res.status(500).json({ message: "Failed to fetch orders" });
-  }
+// Structured logging
+const logOrderEvent = (event, data) => {
+  console.log(`[ORDER ${event}]`, {
+    ...data,
+    timestamp: new Date().toISOString(),
+  });
 };
 
+/* ==================== GET USER ORDERS ==================== */
 export const getUserOrders = async (req, res) => {
   try {
-    const userId = req.user?._id || req.user?.id || req.user;
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    const userId = req.user?._id || req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: "Unauthorized" 
+      });
+    }
 
-    const orders = await Order.find({ userId }).sort({ createdAt: -1 });
-    res.json({ orders });
-  } catch (err) {
-    console.error("Get user orders error:", err);
-    res.status(500).json({ message: "Failed to fetch user orders" });
+    const orders = await Order.find({ userId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    logOrderEvent("FETCH_USER_ORDERS", { 
+      userId, 
+      count: orders.length 
+    });
+
+    return res.json({ 
+      success: true, 
+      orders 
+    });
+  } catch (error) {
+    console.error("Get user orders error:", error);
+    logOrderEvent("FETCH_USER_ORDERS_ERROR", {
+      userId: req.user?._id,
+      error: error.message,
+    });
+    
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch orders" 
+    });
   }
 };
 
+/* ==================== GET ORDER BY ID ==================== */
 export const getOrderById = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id).populate("userId", "email name");
-    if (!order) return res.status(404).json({ message: "Order not found" });
-    res.json({ order });
-  } catch (err) {
-    console.error("Get order by id error:", err);
-    res.status(500).json({ message: "Failed to fetch order" });
-  }
-};
-
-/* ----------------- Update / Cancel ----------------- */
-export const updateOrderStatus = async (req, res) => {
-  try {
-    const { orderStatus } = req.body;
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { orderStatus },
-      { new: true }
-    ).populate("userId", "email name");
-
-    if (!order) return res.status(404).json({ message: "Order not found" });
-
-    // Email customer if completed
-    if (orderStatus === "completed" && order.userId?.email) {
-      try {
-        await sendEmail({
-          to: order.userId.email,
-          subject: `Order Completed ✅ — ${order.orderNumber}`,
-          html: `<p>Hi ${order.userId.name || ""},</p>
-                 <p>Your order <strong>${order.orderNumber}</strong> has been marked as <strong>Completed</strong>.</p>`,
-        });
-      } catch (err) {
-        console.warn("Failed to send completion email:", err.message || err);
-      }
-    }
-
-    res.json({ message: "Order status updated", order });
-  } catch (err) {
-    console.error("Update order status error:", err);
-    res.status(500).json({ message: "Failed to update order status" });
-  }
-};
-
-export const cancelOrder = async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id).populate("userId", "email name");
-    if (!order) return res.status(404).json({ message: "Order not found" });
-
-    const requesterId = req.user?._id?.toString() || req.user?.id?.toString();
-    const ownerId = order.userId?._id?.toString() || order.userId?.toString();
+    const { id } = req.params;
+    const userId = req.user?._id || req.user?.id;
     const isAdmin = req.user?.isAdmin;
 
-    if (requesterId !== ownerId && !isAdmin) {
-      return res.status(403).json({ message: "Not authorized to cancel this order" });
+    const order = await Order.findById(id)
+      .populate("userId", "email name fullName")
+      .lean();
+
+    if (!order) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Order not found" 
+      });
     }
 
-    order.orderStatus = "cancelled";
-    order.paymentStatus = "refunded";
-    await order.save();
+    // Check authorization (owner or admin)
+    const orderUserId = order.userId?._id?.toString() || order.userId?.toString();
+    const requestUserId = userId?.toString();
 
-    if (order.userId?.email) {
-      try {
-        await sendEmail({
-          to: order.userId.email,
-          subject: `Order Cancelled ❌ — ${order.orderNumber}`,
-          html: `<p>Hi ${order.userId.name || ""},</p>
-                 <p>Your order <strong>${order.orderNumber}</strong> has been cancelled.</p>`,
-        });
-      } catch (err) {
-        console.warn("Failed to send cancel email:", err.message || err);
-      }
+    if (orderUserId !== requestUserId && !isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Not authorized to view this order" 
+      });
     }
 
-    res.json({ message: "Order cancelled", order });
-  } catch (err) {
-    console.error("Cancel order error:", err);
-    res.status(500).json({ message: "Failed to cancel order" });
+    logOrderEvent("FETCH_ORDER_BY_ID", { 
+      orderId: order._id,
+      userId: requestUserId 
+    });
+
+    return res.json({ 
+      success: true, 
+      order 
+    });
+  } catch (error) {
+    console.error("Get order by ID error:", error);
+    
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch order" 
+    });
   }
 };
 
-/* ----------------- Admin stats ----------------- */
+/* ==================== GET ALL ORDERS (ADMIN) ==================== */
+export const getAllOrders = async (req, res) => {
+  try {
+    // Verify admin access
+    if (!req.user?.isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Admin access required" 
+      });
+    }
+
+    const orders = await Order.find()
+      .sort({ createdAt: -1 })
+      .populate("userId", "email name fullName")
+      .lean();
+
+    logOrderEvent("ADMIN_FETCH_ALL_ORDERS", { 
+      count: orders.length,
+      admin: req.user.email || req.user._id 
+    });
+
+    return res.json({ 
+      success: true, 
+      orders 
+    });
+  } catch (error) {
+    console.error("Get all orders error:", error);
+    logOrderEvent("ADMIN_FETCH_ORDERS_ERROR", {
+      admin: req.user?.email,
+      error: error.message,
+    });
+    
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch orders" 
+    });
+  }
+};
+
+/* ==================== GET ORDER STATISTICS (ADMIN) ==================== */
 export const getOrderStats = async (req, res) => {
   try {
+    // Verify admin access
+    if (!req.user?.isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Admin access required" 
+      });
+    }
+
+    // Total orders count
     const totalOrders = await Order.countDocuments();
+
+    // Total revenue (only paid orders)
     const revenueAgg = await Order.aggregate([
       { $match: { paymentStatus: "paid" } },
       { $group: { _id: null, totalRevenue: { $sum: "$totalAmount" } } },
     ]);
     const totalRevenue = revenueAgg[0]?.totalRevenue || 0;
 
-    res.json({ totalOrders, totalRevenue });
-  } catch (err) {
-    console.error("Get order stats error:", err);
-    res.status(500).json({ message: "Failed to fetch stats" });
-  }
-};
+    // Orders by status
+    const ordersByStatus = await Order.aggregate([
+      {
+        $group: {
+          _id: "$orderStatus",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
-/* ----------------- Create Order (Checkout) ----------------- */
-export const createOrderFromCheckout = async (req, res) => {
-  try {
-    const {
-      reference,
-      items: bodyItems,
-      customer: rawCustomer,
-      totalAmount: bodyTotal,
-      deliveryDate,
-      deliveryTime,
-      vendor,
-    } = req.body;
-
-    const userId = req.user?._id || req.user?.id || req.user;
-    if (!reference) return res.status(400).json({ message: "Missing payment reference" });
-
-    const customer = sanitizeCustomer(rawCustomer || {});
-
-    let items = Array.isArray(bodyItems) && bodyItems.length ? bodyItems : null;
-    let totalAmount = typeof bodyTotal === "number" ? bodyTotal : 0;
-
-    if (items) {
-      // Ensure each item has name, image, price, quantity (and correct pack math)
-      let computedTotal = 0;
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i];
-        if (!it.drinkId) return res.status(400).json({ message: `Item ${i} missing drinkId` });
-
-        // ensure pack price is correct by reading from DB
-        const product = await Drink.findById(it.drinkId);
-        if (!product) return res.status(404).json({ message: `Product ${it.drinkId} not found` });
-
-        // find selected pack by pack number
-        const selectedPack =
-          product.packs?.find((p) => Number(p.pack) === Number(it.pack)) || product.packs?.[0];
-
-        // set price as price for one pack unit
-        const unitPrice = selectedPack?.price || 0;
-
-        // fill missing fields
-        items[i].name = items[i].name || product.name;
-        items[i].image = items[i].image || product.image || product.imageUrl || "";
-        // if price missing or invalid, set to pack unit price
-        if (typeof items[i].price !== "number" || items[i].price === 0) {
-          items[i].price = unitPrice;
-        }
-        items[i].quantity = items[i].quantity || 1;
-
-        computedTotal += items[i].price * items[i].quantity;
-      }
-      if (!bodyTotal) totalAmount = computedTotal;
-    } else {
-      // Build from server-side cart
-      const cartItems = await Cart.find({ userId }).populate("drinkId");
-      if (!cartItems.length) return res.status(404).json({ message: "Cart is empty" });
-
-      let computedTotal = 0;
-      const builtItems = [];
-      for (const ci of cartItems) {
-        const product = ci.drinkId;
-        if (!product) continue;
-
-        const selectedPack =
-          product.packs?.find((p) => Number(p.pack) === Number(ci.pack)) || product.packs?.[0];
-        const unitPrice = selectedPack?.price || 0;
-        const qty = ci.quantity || 1;
-
-        builtItems.push({
-          drinkId: product._id,
-          name: product.name,
-          image: product.image || product.imageUrl || "",
-          pack: selectedPack?.pack || null,
-          price: unitPrice,
-          quantity: qty,
-        });
-
-        computedTotal += unitPrice * qty;
-      }
-      items = builtItems;
-      if (!bodyTotal) totalAmount = computedTotal;
-    }
-
-    if (!items.length) return res.status(400).json({ message: "No items to create order" });
-    if (!totalAmount || totalAmount <= 0) return res.status(400).json({ message: "Invalid total amount" });
-
-    // Prevent duplicate order
-    let existing = await Order.findOne({ paystackReference: reference });
-    if (existing) return res.status(200).json({ success: true, message: "Order already exists", order: existing });
-
-    // Generate order number
-    const orderNumber = await getNextOrderNumber();
-    const parsedDeliveryDate = deliveryDate ? new Date(deliveryDate) : null;
-
-    const order = await Order.create({
-      userId,
-      customer,
-      deliveryDate: parsedDeliveryDate,
-      deliveryTime: deliveryTime || null,
-      items,
-      totalAmount,
-      paystackReference: reference,
-      paymentStatus: "pending",
-      orderStatus: "confirmed",
-      orderNumber,
-      vendor: vendor || "",
+    // Recent orders (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const recentOrders = await Order.countDocuments({
+      createdAt: { $gte: sevenDaysAgo },
     });
 
-    // Notify customer
-    if (customer?.email) {
-      try {
-        await sendEmail({
-          to: customer.email,
-          subject: `Order Received — ${orderNumber}`,
-          html: `<p>Hi ${customer.fullName || "Customer"},</p>
-                 <p>Your order <strong>${orderNumber}</strong> is received.</p>
-                 <p><strong>Items:</strong></p>
-                 <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
-                 <p><strong>Total:</strong> ₵${totalAmount}</p>
-                 ${parsedDeliveryDate ? `<p><strong>Delivery:</strong> ${parsedDeliveryDate.toISOString().slice(0,10)} ${deliveryTime ? "at " + deliveryTime : ""}</p>` : ""}`
-        });
-      } catch (err) {
-        console.warn("Customer email failed:", err.message || err);
-      }
-    }
+    // Pending orders
+    const pendingOrders = await Order.countDocuments({
+      orderStatus: { $in: ["pending", "confirmed"] },
+    });
 
-    // Notify admin
-    if (process.env.ADMIN_EMAIL) {
-      try {
-        await sendEmail({
-          to: process.env.ADMIN_EMAIL,
-          subject: `New Order — ${orderNumber}`,
-          html: `<p>New order <strong>${orderNumber}</strong> placed by ${customer.fullName || userId}</p>
-                 <p>Total: ₵${totalAmount}</p>`,
-        });
-      } catch (err) {
-        console.warn("Admin email failed:", err.message || err);
-      }
-    }
+    const stats = {
+      totalOrders,
+      totalRevenue,
+      recentOrders,
+      pendingOrders,
+      ordersByStatus: ordersByStatus.reduce((acc, item) => {
+        acc[item._id] = item.count;
+        return acc;
+      }, {}),
+    };
 
-    // Clear cart
-    try {
-      await Cart.deleteMany({ userId });
-    } catch (err) {
-      console.warn("Failed to clear cart:", err.message || err);
-    }
+    logOrderEvent("ADMIN_FETCH_STATS", { 
+      admin: req.user.email || req.user._id 
+    });
 
-    res.status(201).json({ success: true, order });
-  } catch (err) {
-    console.error("Create order error:", err);
-    res.status(500).json({ message: "Failed to create order", error: err.message || err });
+    return res.json({ 
+      success: true, 
+      stats 
+    });
+  } catch (error) {
+    console.error("Get order stats error:", error);
+    
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch statistics" 
+    });
   }
 };
 
-/* ----------------- Paystack Webhook ----------------- */
-export const webhookPayment = async (req, res) => {
+/* ==================== UPDATE ORDER STATUS (ADMIN) ==================== */
+export const updateOrderStatus = async (req, res) => {
   try {
-    const { event, data } = req.body;
-    if (event !== "charge.success") return res.status(200).send("Ignored");
-
-    const { reference, metadata, amount } = data;
-    const { cart, customer: rawCustomer, deliveryDate, deliveryTime, userId, vendor } = metadata || {};
-
-    if (!cart || !userId) return res.status(400).send("Missing metadata");
-
-    const items = [];
-    let totalAmount = 0;
-
-    for (const item of cart) {
-      const drink = await Drink.findById(item.drinkId);
-      if (!drink) continue;
-
-      const selectedPack = drink.packs?.find(p => Number(p.pack) === Number(item.pack)) || drink.packs?.[0];
-      const unitPrice = selectedPack?.price || 0;
-      const quantity = item.quantity || 1;
-      const subtotal = unitPrice * quantity;
-      totalAmount += subtotal;
-
-      items.push({
-        drinkId: drink._id,
-        name: drink.name,
-        image: drink.imageUrl || drink.image || "",
-        pack: selectedPack?.pack || null,
-        price: unitPrice,
-        quantity,
+    // Verify admin access
+    if (!req.user?.isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Admin access required" 
       });
     }
 
-    let order = await Order.findOne({ paystackReference: reference });
+    const { id } = req.params;
+    const { orderStatus } = req.body;
+
+    // Validate status
+    const validStatuses = [
+      "pending",
+      "confirmed", 
+      "processing", 
+      "shipped", 
+      "delivered", 
+      "completed", 
+      "cancelled"
+    ];
+
+    if (!validStatuses.includes(orderStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order status",
+        validStatuses,
+      });
+    }
+
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { orderStatus },
+      { new: true }
+    ).populate("userId", "email name fullName");
+
     if (!order) {
-      const customer = sanitizeCustomer(rawCustomer || {});
-      const orderNumber = await getNextOrderNumber();
-      const parsedDeliveryDate = deliveryDate ? new Date(deliveryDate) : null;
-
-      order = await Order.create({
-        userId,
-        customer,
-        deliveryDate: parsedDeliveryDate,
-        deliveryTime: deliveryTime || null,
-        items,
-        totalAmount,
-        paystackReference: reference,
-        paymentStatus: "paid",
-        orderStatus: "confirmed",
-        orderNumber,
-        vendor: vendor || "",
+      return res.status(404).json({ 
+        success: false, 
+        message: "Order not found" 
       });
+    }
 
-      // Customer email
-      if (customer.email) {
-        try {
-          await sendEmail({
-            to: customer.email,
-            subject: `Order Confirmed — ${orderNumber}`,
-            html: `<p>Hi ${customer.fullName || ""},</p>
-                   <p>Your order <strong>${orderNumber}</strong> is confirmed.</p>
-                   <ul>${items.map(i => `<li>${i.quantity} × ${i.name} (${i.pack ?? ""}) — ₵${i.price}</li>`).join("")}</ul>
-                   <p>Total: ₵${totalAmount}</p>`,
-          });
-        } catch (err) {
-          console.warn("Customer email failed:", err.message || err);
-        }
-      }
+    logOrderEvent("STATUS_UPDATED", {
+      orderId: order._id,
+      newStatus: orderStatus,
+      updatedBy: req.user.email || req.user._id,
+    });
 
-      // Admin email
-      if (process.env.ADMIN_EMAIL) {
-        try {
-          await sendEmail({
-            to: process.env.ADMIN_EMAIL,
-            subject: `New Order — ${orderNumber}`,
-            html: `<p>New order <strong>${orderNumber}</strong> by ${customer.fullName || userId}</p>
-                   <p>Total: ₵${totalAmount}</p>`,
-          });
-        } catch (err) {
-          console.warn("Admin email failed:", err.message || err);
-        }
+    // Send email notification for important status changes
+    const emailStatuses = ["shipped", "delivered", "completed"];
+    if (emailStatuses.includes(orderStatus) && order.customer?.email) {
+      try {
+        const statusMessages = {
+          shipped: "Your order has been shipped and is on its way! 📦",
+          delivered: "Your order has been delivered. We hope you enjoy it! 🎉",
+          completed: "Your order is complete. Thank you for shopping with us! ✅",
+        };
+
+        await sendEmail({
+          to: order.customer.email,
+          subject: `Order Update - ${order._id}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <div style="background: #0f5132; color: #fff; padding: 20px; border-radius: 8px 8px 0 0;">
+                <h2 style="margin: 0;">Order Status Update</h2>
+              </div>
+              <div style="padding: 20px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 8px 8px;">
+                <p>Hi ${order.customer.fullName},</p>
+                <p>${statusMessages[orderStatus] || `Your order status has been updated to: <strong>${orderStatus}</strong>`}</p>
+                
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <p style="margin: 5px 0;"><strong>Order ID:</strong> ${order._id}</p>
+                  <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #0f5132; font-weight: bold;">${orderStatus.toUpperCase()}</span></p>
+                  <p style="margin: 5px 0;"><strong>Total:</strong> ₵${order.totalAmount.toFixed(2)}</p>
+                </div>
+
+                ${orderStatus === "delivered" ? `
+                  <p>If you have any issues with your order, please contact us immediately.</p>
+                ` : ""}
+
+                <p style="margin-top: 20px; color: #666; font-size: 14px;">
+                  Thank you for choosing us!
+                </p>
+              </div>
+            </div>
+          `,
+        });
+
+        logOrderEvent("STATUS_EMAIL_SENT", {
+          orderId: order._id,
+          email: order.customer.email,
+          status: orderStatus,
+        });
+      } catch (emailError) {
+        console.error("Failed to send status update email:", emailError);
+        logOrderEvent("STATUS_EMAIL_FAILED", {
+          orderId: order._id,
+          error: emailError.message,
+        });
       }
     }
 
-    // Clear cart
-    try {
-      await Cart.deleteMany({ userId });
-    } catch (err) {
-      console.warn("Failed to clear user's cart:", err.message || err);
+    return res.json({ 
+      success: true, 
+      message: "Order status updated successfully", 
+      order 
+    });
+  } catch (error) {
+    console.error("Update order status error:", error);
+    
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to update order status" 
+    });
+  }
+};
+
+/* ==================== CANCEL ORDER ==================== */
+export const cancelOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?._id || req.user?.id;
+    const isAdmin = req.user?.isAdmin;
+
+    const order = await Order.findById(id).populate("userId", "email name fullName");
+
+    if (!order) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Order not found" 
+      });
     }
 
-    res.status(200).send("OK");
-  } catch (err) {
-    console.error("Webhook Error:", err);
-    res.status(500).send("Webhook failed");
+    // Check authorization (owner or admin)
+    const orderUserId = order.userId?._id?.toString() || order.userId?.toString();
+    const requestUserId = userId?.toString();
+
+    if (orderUserId !== requestUserId && !isAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Not authorized to cancel this order" 
+      });
+    }
+
+    // Prevent cancellation of already shipped/delivered orders
+    const nonCancellableStatuses = ["shipped", "delivered", "completed"];
+    if (nonCancellableStatuses.includes(order.orderStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel order with status: ${order.orderStatus}`,
+      });
+    }
+
+    // Update order status
+    order.orderStatus = "cancelled";
+    order.paymentStatus = order.paymentStatus === "paid" ? "refunded" : "cancelled";
+    await order.save();
+
+    logOrderEvent("ORDER_CANCELLED", {
+      orderId: order._id,
+      cancelledBy: req.user.email || requestUserId,
+      previousStatus: order.orderStatus,
+    });
+
+    // Send cancellation email
+    if (order.customer?.email) {
+      try {
+        await sendEmail({
+          to: order.customer.email,
+          subject: `Order Cancelled - ${order._id}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <div style="background: #dc3545; color: #fff; padding: 20px; border-radius: 8px 8px 0 0;">
+                <h2 style="margin: 0;">Order Cancelled</h2>
+              </div>
+              <div style="padding: 20px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 8px 8px;">
+                <p>Hi ${order.customer.fullName},</p>
+                <p>Your order has been cancelled as requested.</p>
+                
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <p style="margin: 5px 0;"><strong>Order ID:</strong> ${order._id}</p>
+                  <p style="margin: 5px 0;"><strong>Total Amount:</strong> ₵${order.totalAmount.toFixed(2)}</p>
+                  ${order.paymentStatus === "refunded" ? `
+                    <p style="margin: 5px 0; color: #0f5132;"><strong>Refund Status:</strong> Your refund will be processed within 5-7 business days.</p>
+                  ` : ""}
+                </div>
+
+                <p>If you have any questions, please don't hesitate to contact us.</p>
+                
+                <p style="margin-top: 20px; color: #666; font-size: 14px;">
+                  We hope to serve you again soon!
+                </p>
+              </div>
+            </div>
+          `,
+        });
+
+        logOrderEvent("CANCEL_EMAIL_SENT", {
+          orderId: order._id,
+          email: order.customer.email,
+        });
+      } catch (emailError) {
+        console.error("Failed to send cancellation email:", emailError);
+        logOrderEvent("CANCEL_EMAIL_FAILED", {
+          orderId: order._id,
+          error: emailError.message,
+        });
+      }
+    }
+
+    return res.json({ 
+      success: true, 
+      message: "Order cancelled successfully", 
+      order 
+    });
+  } catch (error) {
+    console.error("Cancel order error:", error);
+    
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to cancel order" 
+    });
   }
 };

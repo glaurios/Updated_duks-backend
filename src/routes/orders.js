@@ -1,43 +1,50 @@
 // src/routes/orders.js
 import express from "express";
-import {
-  getAllOrders,
-  getUserOrders,
-  getOrderById,
-  updateOrderStatus,
-  cancelOrder,
-  getOrderStats,
-  createOrderFromCheckout,
-  webhookPayment,
+import { 
+  getUserOrders, 
+  getOrderById, 
+  getAllOrders, 
+  getOrderStats, 
+  cancelOrder, 
+  updateOrderStatus 
 } from "../controllers/orderController.js";
-import { authMiddleware, isAdmin } from "../middleware/authMiddleware.js";
+import { authMiddleware } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-/* ============== WEBHOOK (PUBLIC) ============== */
-/*
-  Important: webhook must be registered before any ':id' routes
-  because '/webhook' would otherwise match '/:id' and get intercepted.
-*/
-router.post("/webhook", express.json({ type: "*/*" }), webhookPayment);
+/* ==================== HELPER MIDDLEWARE ==================== */
 
-/* ============== CUSTOMER ROUTES ============== */
+// Admin check middleware
+const requireAdmin = (req, res, next) => {
+  if (!req.user?.isAdmin) {
+    return res.status(403).json({ 
+      success: false, 
+      message: "Admin access required" 
+    });
+  }
+  next();
+};
 
-// Create order after successful Paystack checkout (frontend call)
-router.post("/paystack/callback", authMiddleware, createOrderFromCheckout);
+/* ==================== USER ORDER ROUTES ==================== */
 
 // Get logged-in user's orders
 router.get("/my-orders", authMiddleware, getUserOrders);
 
-// Cancel an order (Only user who owns it)
-router.put("/:id/cancel", authMiddleware, cancelOrder);
+// Cancel order (user can cancel their own orders)
+router.patch("/:id/cancel", authMiddleware, cancelOrder);
 
-// Get specific order by ID (only owner or admin)
+// Get single order by ID (must come after specific routes)
 router.get("/:id", authMiddleware, getOrderById);
 
-/* ============== ADMIN ROUTES ============== */
-router.get("/", authMiddleware, isAdmin, getAllOrders);
-router.put("/:id/status", authMiddleware, isAdmin, updateOrderStatus);
-router.get("/stats", authMiddleware, isAdmin, getOrderStats);
+/* ==================== ADMIN ORDER ROUTES ==================== */
+
+// Get order statistics (admin only)
+router.get("/admin/stats", authMiddleware, requireAdmin, getOrderStats);
+
+// Get all orders (admin only)  
+router.get("/admin/all", authMiddleware, requireAdmin, getAllOrders);
+
+// Update order status (admin only)
+router.patch("/admin/:id/status", authMiddleware, requireAdmin, updateOrderStatus);
 
 export default router;
