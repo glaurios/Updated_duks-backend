@@ -33,7 +33,6 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function(origin, callback) {
-    // allow requests with no origin (like mobile apps or Postman)
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1) {
       const msg = `CORS policy: ${origin} not allowed`;
@@ -44,9 +43,26 @@ app.use(cors({
   credentials: true,
 }));
 
-// ⚠️ CRITICAL: Webhook route MUST be configured BEFORE express.json()
-// This allows Paystack webhook to receive raw body for signature verification
-app.use("/api/payments/webhook", express.raw({ type: "application/json" }));
+// ⚠️ CRITICAL: Webhook MUST be configured BEFORE express.json()
+app.use(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  (req, res, next) => {
+    // Save raw body for signature verification
+    if (Buffer.isBuffer(req.body)) {
+      req.rawBody = req.body.toString('utf8');
+      // Parse for access to req.body.event, req.body.data
+      try {
+        req.body = JSON.parse(req.rawBody);
+      } catch (e) {
+        console.error('Webhook body parse error:', e);
+        return res.status(400).send('Invalid JSON');
+      }
+    }
+    next();
+  }
+);
+
 
 // ---------------- Middleware ----------------
 app.use(express.json());

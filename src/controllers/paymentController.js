@@ -391,6 +391,7 @@ export const initializePayment = async (req, res) => {
 
 /* ==================== 2. PAYSTACK WEBHOOK ==================== */
 export const webhookPayment = async (req, res) => {
+console.log('🔔 WEBHOOK HIT! Event:', req.body?.event, 'Reference:', req.body?.data?.reference); 
   try {
     // CRITICAL: Verify webhook signature
     if (!verifyPaystackSignature(req)) {
