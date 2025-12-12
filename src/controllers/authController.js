@@ -8,19 +8,16 @@ import User from "../models/user.js";
 const generateTokens = (user) => {
   const payload = {
     id: user._id,
-    isAdmin: user.isAdmin, // ✅ Ensures token carries admin flag
+    isAdmin: user.isAdmin,
   };
 
-  const token = jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: "1d",
-  });
+  const token = jwt.sign(payload, process.env.JWT_SECRET); // never expires
 
-  const refreshToken = jwt.sign(payload, process.env.REFRESH_SECRET, {
-    expiresIn: "7d",
-  });
+  const refreshToken = jwt.sign(payload, process.env.REFRESH_SECRET); // also never expires
 
   return { token, refreshToken };
 };
+
 
 // =======================================================
 // 🧩 Helper: Fixed Admin Check
